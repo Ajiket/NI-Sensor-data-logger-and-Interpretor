@@ -1,0 +1,43 @@
+diff --git a/production_logger.py b/production_logger.py
+index 1234567..890abcdef 100644
+--- a/production_logger.py
++++ b/production_logger.py
+@@ -432,6 +432,8 @@ class DAQEngine:
+             self.worksheet.append_row(row)
+             self.shared_mem.last_cloud_sync = datetime.now().isoformat()
++            # FIX: Reset error timer on success so we don't stay throttled
++            self.last_cloud_error = 0
+         except Exception as e:
+             print(f"Cloud Error: {e}")
+             self.worksheet = None
+@@ -645,6 +647,11 @@ def settings():
+         
+         shared_memory.reinitialize_sensors(num_thermocouples)
+         
++        # FIX: Clear CSV buffer on reconfig to prevent data corruption
++        with shared_memory.lock:
++            shared_memory.csv_buffer = []
++            shared_memory.buffer_warning = False
++            
+         flash("Settings Saved Successfully", "success")
+         return redirect(url_for("dashboard"))
+ 
+@@ -945,7 +952,9 @@ def login_required(f):
+ @app.route("/dashboard", methods=["GET"])
+ @login_required
+ def dashboard():
+-    return render_template_string(DASHBOARD_TEMPLATE, user=session["user"])
++    # FIX: Pass dynamic channel count to template
++    num_channels = global_config.config_hardware["NUM_CHANNELS"]
++    return render_template_string(DASHBOARD_TEMPLATE, user=session["user"], num_thermocouples=num_channels)
+ 
+ @app.route("/api/data", methods=["GET"])
+ @login_required
+@@ -1034,7 +1043,8 @@ DASHBOARD_TEMPLATE = """
+     <script>
+-        const SENSOR_CHANNELS = 4;
++        // FIX: Use dynamic channel count from backend
++        const SENSOR_CHANNELS = {{ num_thermocouples }};
+         
+         function initializeSensorGrid() {
+             const grid = document.getElementById('sensorGrid');

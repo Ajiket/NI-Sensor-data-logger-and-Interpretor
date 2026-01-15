@@ -1,0 +1,155 @@
+diff --git a/production_logger.py b/production_logger.py
+index 1234567..890abcdef 100644
+--- a/production_logger.py
++++ b/production_logger.py
+@@ -8,6 +8,7 @@ import csv
+ import gspread
+ import os
+ import secrets
++import json
+ from collections import deque
+ 
+ # ==========================================
+@@ -32,18 +33,35 @@ class GlobalConfig:
+     """
+     def __init__(self):
+         self.lock = threading.RLock()
++        self.CONFIG_FILE = "config.json"
++        self.restart_required = threading.Event()
++        
+         # Initialize with defaults
+         self.config_hardware = {
+             "DEVICE_NAME": "cDAQ1Mod1",
+             "CHANNELS_STR": "ai0:3",
+             "NUM_CHANNELS": 4,
+             "TC_TYPE": "K"
+         }
+         self.config_logging = {
+             "ENABLE_CSV_LOGGING": True,
+             "ENABLE_GOOGLE_SHEETS": True
+         }
+         self.config_timing = {
+             "SAMPLING_INTERVAL": 2.0,
+             "DECIMAL_PLACES": 2,
+-            "ENABLE_HIGH_SPEED": False
++            "ENABLE_HIGH_SPEED": False,
++            "CLOUD_RECONNECT_INTERVAL": 60.0
+         }
++        self.load_from_disk()
++
++    def load_from_disk(self):
++        """Load configuration from JSON file if it exists."""
++        if os.path.exists(self.CONFIG_FILE):
++            try:
++                with open(self.CONFIG_FILE, 'r') as f:
++                    data = json.load(f)
++                    with self.lock:
++                        self.config_hardware.update(data.get("config_hardware", {}))
++                        self.config_logging.update(data.get("config_logging", {}))
++                        self.config_timing.update(data.get("config_timing", {}))
++                print("✅ Configuration loaded from config.json")
++            except Exception as e:
++                print(f"⚠️ Failed to load config.json: {e}")
++
++    def save_to_disk(self):
++        """Save current configuration to JSON file."""
++        data = {
++            "config_hardware": self.config_hardware,
++            "config_logging": self.config_logging,
++            "config_timing": self.config_timing
++        }
++        try:
++            with open(self.CONFIG_FILE, 'w') as f:
++                json.dump(data, f, indent=4)
++        except Exception as e:
++            print(f"⚠️ Failed to save config: {e}")
+ 
+     def update_config(self, section: str, updates: dict):
+         with self.lock:
+             getattr(self, section).update(updates)
++            self.save_to_disk()
++            
++            # Trigger DAQ restart if hardware changed
++            if section == "config_hardware":
++                self.restart_required.set()
+ 
+     def get_config(self, section: str):
+         with self.lock:
+             return getattr(self, section).copy()
+@@ -102,6 +120,7 @@ class DAQEngine:
+         self.running = True
+         self.task = None
+         self.worksheet = None
++        self.last_cloud_error = 0
+         
+         # Initial Cloud Connect
+         if global_config.config_logging["ENABLE_GOOGLE_SHEETS"]:
+@@ -124,11 +143,15 @@ class DAQEngine:
+                 units=TemperatureUnits.DEG_C,
+                 thermocouple_type=tc_type
+             )
+-            # Note: High Speed Logic would go here if implemented
++            
++            # FIX: Implement High Speed Mode
++            if global_config.config_timing.get("ENABLE_HIGH_SPEED", False):
++                self.task.ai_channels.all.ai_adc_timing_mode = ADCTimingMode.HIGH_SPEED
++                
+             self.task.start()
+             self.shared_mem.connection_status = "Connected"
+-            print("✅ NI-DAQmx task opened successfully")
++            print(f"✅ DAQ Task Started: {num_channels} channels (High Speed: {global_config.config_timing.get('ENABLE_HIGH_SPEED')})")
++            
+         except Exception as e:
+             print(f"🔥 DAQ Init Error: {e}")
+             self.shared_mem.connection_status = "Error"
+             self.task = None
+ 
++    def _close_task(self):
++        if self.task:
++            try:
++                self.task.close()
++            except:
++                pass
++            self.task = None
++
+     def run(self):
+         print("--- DAQ Engine Loop Started ---")
+         self._open_nidaqmx_task()
+ 
+         while self.running:
++            # FIX: Check for Dynamic Reconfiguration
++            if global_config.restart_required.is_set():
++                print("🔄 Configuration changed. Restarting DAQ Task...")
++                self._close_task()
++                global_config.restart_required.clear()
++                self._open_nidaqmx_task()
++                
+             loop_start = time.time()
+             
+             # 1. READ
+@@ -211,7 +234,13 @@ class DAQEngine:
+     def _upload_to_cloud(self, row):
+         if not global_config.config_logging["ENABLE_GOOGLE_SHEETS"]:
+             return
+-            
++        
++        # FIX: Cloud Reconnect Interval (Prevent Network Hammer)
++        retry_interval = global_config.config_timing.get("CLOUD_RECONNECT_INTERVAL", 60)
++        if self.worksheet is None:
++            if (time.time() - self.last_cloud_error) < retry_interval:
++                return
++
+         if self.worksheet is None:
+             self.worksheet = connect_to_cloud(...) # (Simplified for patch context)
+             if self.worksheet is None:
+-                return
++                self.last_cloud_error = time.time()
++                return
+ 
+         try:
+             self.worksheet.append_row(row)
+         except Exception as e:
+             print(f"Cloud Error: {e}")
+             self.worksheet = None
++            self.last_cloud_error = time.time()
+             self.shared_mem.connection_status = "Cloud Disconnected"

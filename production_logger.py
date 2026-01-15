@@ -16,6 +16,7 @@ import time
 import csv
 import json
 import logging
+import os
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -36,6 +37,8 @@ class GlobalConfig:
     
     def __init__(self):
         self.lock = threading.RLock()
+        self.CONFIG_FILE = "config.json"
+        self.restart_required = threading.Event()
         
         # config_hardware: Device and channel specifications
         self.config_hardware = {
@@ -56,18 +59,54 @@ class GlobalConfig:
             "SAMPLING_INTERVAL": 2.0,  # seconds
             "DECIMAL_PLACES": 2,
             "ENABLE_HIGH_SPEED": False,
+            "CLOUD_RECONNECT_INTERVAL": 60.0
         }
         
         # security: User access control
         self.security = {
             "ALLOWED_USERS": ["admin@company.com", "engineer@lab.com"],
         }
+        
+        self.load_from_disk()
+    
+    def load_from_disk(self):
+        """Load configuration from JSON file if it exists."""
+        if os.path.exists(self.CONFIG_FILE):
+            try:
+                with open(self.CONFIG_FILE, 'r') as f:
+                    data = json.load(f)
+                    with self.lock:
+                        self.config_hardware.update(data.get("config_hardware", {}))
+                        self.config_logging.update(data.get("config_logging", {}))
+                        self.config_timing.update(data.get("config_timing", {}))
+                print("✅ Configuration loaded from config.json")
+            except Exception as e:
+                print(f"⚠️ Failed to load config.json: {e}")
+    
+    def save_to_disk(self):
+        """Save current configuration to JSON file."""
+        data = {
+            "config_hardware": self.config_hardware,
+            "config_logging": self.config_logging,
+            "config_timing": self.config_timing
+        }
+        try:
+            with open(self.CONFIG_FILE, 'w') as f:
+                json.dump(data, f, indent=4)
+        except Exception as e:
+            print(f"⚠️ Failed to save config: {e}")
     
     def update_config(self, section: str, updates: Dict[str, Any]):
         """Thread-safe configuration update."""
         with self.lock:
             if section in ["config_hardware", "config_logging", "config_timing", "security"]:
                 getattr(self, section).update(updates)
+        
+        self.save_to_disk()
+        
+        # Trigger DAQ restart if hardware changed
+        if section == "config_hardware":
+            self.restart_required.set()
     
     def get_config(self, section: str) -> Dict[str, Any]:
         """Thread-safe configuration read."""
@@ -212,6 +251,7 @@ class DAQEngine:
         self.running = False
         self.gspread_client = None
         self.worksheet = None
+        self.last_cloud_error = 0
         self._initialize_gspread()
     
     def _initialize_gspread(self):
@@ -254,13 +294,27 @@ class DAQEngine:
                 rate=1.0 / sampling_interval,
                 sample_mode=nidaqmx.constants.AcquisitionType.CONTINUOUS
             )
+            
+            # FIX: Implement High Speed Mode
+            if global_config.config_timing.get("ENABLE_HIGH_SPEED", False):
+                self.task.ai_channels.all.ai_adc_timing_mode = nidaqmx.constants.ADCTimingMode.HIGH_SPEED
+                
             self.task.start()
             self.shared_mem.connection_status = "Connected"
-            logger.info("NI-DAQmx task opened successfully")
+            num_channels = global_config.config_hardware["NUM_CHANNELS"]
+            print(f"✅ DAQ Task Started: {num_channels} channels (High Speed: {global_config.config_timing.get('ENABLE_HIGH_SPEED')})")
         except Exception as e:
             logger.error(f"Failed to open NI-DAQmx task: {e}")
             self.shared_mem.connection_status = "Error"
             raise
+    
+    def _close_task(self):
+        if self.task:
+            try:
+                self.task.close()
+            except:
+                pass
+            self.task = None
     
     def _read_hardware(self) -> List[float]:
         """Step 1: Read Hardware based on current CONFIG state."""
@@ -351,6 +405,12 @@ class DAQEngine:
         if not config_logging.get("ENABLE_GOOGLE_SHEETS") or not self.gspread_client:
             return
         
+        # FIX: Cloud Reconnect Interval (Prevent Network Hammer)
+        retry_interval = global_config.config_timing.get("CLOUD_RECONNECT_INTERVAL", 60)
+        if self.worksheet is None:
+            if (time.time() - self.last_cloud_error) < retry_interval:
+                return
+        
         try:
             if self.worksheet is None:
                 # Try to open existing worksheet
@@ -366,11 +426,14 @@ class DAQEngine:
             
             self.worksheet.append_row(row)
             self.shared_mem.last_cloud_sync = datetime.now().isoformat()
+            # FIX: Reset error timer on success so we don't stay throttled
+            self.last_cloud_error = 0
             logger.info("Successfully uploaded to Google Sheets")
         
         except Exception as e:
             logger.warning(f"Cloud upload failed: {e}")
             self.worksheet = None
+            self.last_cloud_error = time.time()
             self.shared_mem.log_error(f"Cloud upload failed: {e}")
     
     def _update_shared_memory(self, processed_data: Dict[str, Any]):
@@ -400,6 +463,13 @@ class DAQEngine:
         
         try:
             while self.running:
+                # FIX: Check for Dynamic Reconfiguration
+                if global_config.restart_required.is_set():
+                    print("🔄 Configuration changed. Restarting DAQ Task...")
+                    self._close_task()
+                    global_config.restart_required.clear()
+                    self._open_nidaqmx_task()
+                    
                 loop_start = time.time()
                 
                 # Step 1: Read Hardware
@@ -498,7 +568,9 @@ def login():
 @login_required
 def dashboard():
     """Dashboard view."""
-    return render_template_string(DASHBOARD_TEMPLATE, user=session["user"])
+    # FIX: Pass dynamic channel count to template
+    num_channels = global_config.config_hardware["NUM_CHANNELS"]
+    return render_template_string(DASHBOARD_TEMPLATE, user=session["user"], num_thermocouples=num_channels)
 
 
 @app.route("/logout", methods=["GET"])
@@ -572,6 +644,11 @@ def settings():
             
             # Reinitialize sensor data
             shared_memory.reinitialize_sensors(num_thermocouples)
+            
+            # FIX: Clear CSV buffer on reconfig to prevent data corruption
+            with shared_memory.lock:
+                shared_memory.csv_buffer = []
+                shared_memory.buffer_warning = False
             
             logger.info(f"Settings updated: {num_thermocouples} channels, TC Type {tc_type}, "
                        f"Interval {sampling_interval:.2f}s, CSV={enable_csv}, Sheets={enable_sheets}")
@@ -965,7 +1042,8 @@ DASHBOARD_TEMPLATE = """
     </footer>
     
     <script>
-        const SENSOR_CHANNELS = 4;
+        // FIX: Use dynamic channel count from backend
+        const SENSOR_CHANNELS = {{ num_thermocouples }};
         const UPDATE_INTERVAL = 2000;  // 2 seconds
         
         function initializeSensorGrid() {
