@@ -1,0 +1,31 @@
+﻿```yaml
+# system_workflow.yaml
+process_architecture:
+  concurrency: "Multi-threaded (Daemon DAQ + Main Flask)"
+
+workflow_daq_engine:
+  loop_phase:
+    steps:
+      1: "Read Hardware based on current CONFIG state"
+      2: "Process Data"
+      3: "Push to CSV Buffer (if CSV enabled)"
+      4: "Attempt CSV Write (if CSV enabled)"
+      5: "Attempt Cloud Upload (if Sheets enabled)"
+      6: "Update Shared Memory"
+      7: "Sleep (Calculated from Sampling Freq)"
+
+workflow_web_server:
+  routes:
+    "/": "Login Logic"
+    "/dashboard": "Render Dashboard with Link to Settings"
+    "/api/data": "Return latest_data JSON"
+    "/logout": "Clear Session"
+    "/settings":
+      GET: "Render Settings Form with current config values"
+      POST: 
+        1: "Parse Form Data (Num Channels, TC Type, Freq, Toggles)"
+        2: "Update Global Configuration Dictionary"
+        3: "Re-calculate derived values (Interval = 1/Freq)"
+        4: "Flash Success Message"
+        5: "Redirect to Dashboard"
+```

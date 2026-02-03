@@ -1,0 +1,39 @@
+1. Use Case Diagram (use_case.puml)
+Captures user interactions including the new Configuration features.
+
+@startuml use_case_diagram
+left to right direction
+actor "Lab Operator" as User
+
+package "Web Dashboard System" {
+    usecase "Login (Email Auth)" as UC1
+    usecase "View Live Dashboard" as UC2
+    usecase "Configure System" as UC3
+    usecase "Logout" as UC4
+    
+    (View Live Dashboard) .> (Auto-Refresh Data) : include
+}
+
+package "Configuration Features" {
+    usecase "Set Thermocouple Count" as UC3_1
+    usecase "Set Sensor Type (K,J,T,E)" as UC3_2
+    usecase "Set Sampling Frequency" as UC3_3
+    usecase "Toggle Logging Targets" as UC3_4
+}
+
+User --> UC1
+User --> UC2
+User --> UC3
+User --> UC4
+
+UC3 ..> UC3_1 : include
+UC3 ..> UC3_2 : include
+UC3 ..> UC3_3 : include
+UC3 ..> UC3_4 : include
+
+note right of UC3_4
+  Toggle CSV and 
+  Google Sheets independently
+end note
+
+@enduml

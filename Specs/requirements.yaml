@@ -1,0 +1,37 @@
+﻿```yaml
+# requirements.yaml
+meta:
+  project_name: "NI_Thermocouple_Logger_Web_System"
+  version: "2.1 (Configurable UI)"
+
+hardware_specs:
+  device_alias: "cDAQ1Mod1" 
+  default_sensor_type: "Thermocouple Type K"
+
+functional_requirements:
+  data_acquisition:
+    - description: "Read multiple thermocouple channels (ai0:n) continuously."
+    - description: "Detect open circuits (values > 2000) and label as 'Open'."
+  data_storage:
+    - target: "Local CSV"
+      behavior: "Buffer data in RAM if file is locked (PermissionError)."
+    - target: "Google Sheets"
+      behavior: "Auto-reconnect on network failure."
+  
+  configuration_interface:
+    - id: "CONFIG-01"
+      description: "User must be able to input the Number of Thermocouples (1-16)."
+    - id: "CONFIG-02"
+      description: "User must be able to select Thermocouple Type (K, J, T, E)."
+    - id: "CONFIG-03"
+      description: "User must be able to set Sampling Frequency (Hz), converted to Interval (s)."
+    - id: "CONFIG-04"
+      description: "User must be able to toggle CSV and Google Sheets logging independently."
+    - id: "CONFIG-05"
+      description: "Settings changes must persist or trigger a system restart/re-initialization."
+
+  web_interface:
+    - description: "Secure dashboard access via Email Login (Session-based)."
+    - description: "Live data updates via AJAX every 2 seconds."
+    - description: "Dedicated Settings Page accessible from Dashboard."
+```

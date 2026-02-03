@@ -1,0 +1,76 @@
+# features.yaml
+# System: NI Thermocouple Logger Web System
+# Version: 2.4
+# Status: Production Ready
+
+system_info:
+  name: "NI Thermocouple Logger"
+  description: "Industrial-grade Python data acquisition system with web-based monitoring."
+  architecture: "Dual-Process (Daemon DAQ Thread + Flask Web Server)"
+
+hardware_features:
+  - id: "HW-01"
+    name: "Dynamic Channel Configuration"
+    description: "Supports 1 to 16 input channels, fully configurable at runtime without code changes."
+  - id: "HW-02"
+    name: "Multi-Type Support"
+    description: "Native support for Thermocouple types K, J, T, and E via NI-DAQmx."
+  - id: "HW-03"
+    name: "Acquisition Modes"
+    description: "Toggle support for High Speed (max sampling) vs. High Accuracy (noise rejection) modes."
+  - id: "HW-04"
+    name: "Open Circuit Detection"
+    description: "Safety logic that detects broken sensors (values > 2000) and explicitly flags them as 'Open' to prevent false data."
+
+logging_features:
+  - id: "LOG-01"
+    name: "Dual-Target Logging"
+    description: "Simultaneous logging to local CSV files (primary retention) and Google Sheets (remote backup)."
+  - id: "LOG-02"
+    name: "Configurable Precision"
+    description: "User-defined decimal places for temperature readings (Default: 2)."
+  - id: "LOG-03"
+    name: "Data Integrity Protection"
+    description: "Automatically clears data buffers during reconfiguration to prevent 'mixed-column' CSV corruption."
+
+resilience_features:
+  - id: "RES-01"
+    name: "Local Lock Handling"
+    description: "Buffers data in RAM if the local CSV file is locked (e.g., by Excel) and flushes automatically when released."
+  - id: "RES-02"
+    name: "Smart Cloud Recovery"
+    description: "Throttles retries during outages (120s cooldown) to prevent API bans, but resets immediately upon successful reconnection."
+  - id: "RES-03"
+    name: "Configuration Persistence"
+    description: "Saves settings to 'config.json' to ensure system state survives power cycles or software restarts."
+  - id: "RES-04"
+    name: "Hot-Swap Reconfiguration"
+    description: "Gracefully closes and restarts hardware tasks when settings are changed, without stopping the web server."
+
+ui_features:
+  - id: "UI-01"
+    name: "Live Web Dashboard"
+    description: "Responsive sensor grid providing real-time updates every 2 seconds via AJAX."
+  - id: "UI-02"
+    name: "Dynamic Layout"
+    description: "Dashboard UI automatically scales to display cards for the exact number of active channels."
+  - id: "UI-03"
+    name: "Visual Status Indicators"
+    description: "Real-time indicators for Hardware Connection, Cloud Sync status, and Buffer Warnings."
+  - id: "UI-04"
+    name: "Custom Sensor Tagging"
+    description: "Allows users to rename or 'tag' specific thermocouples with custom labels (e.g., 'TC1', 'Oven_Loc1') for easier identification in the dashboard."
+  - id: "UI-05"
+    name: "Real-Time Trend Plotting"
+    description: "Interactive line chart (X: Time, Y: Temperature) with sensor legends. Includes an inference panel showing the Average Temperature and a textbox with the specific value at the current timestamp."
+  - id: "UI-06"
+    name: "Gauge Visualization"
+    description: "Speedometer-style gauges for each channel to visualize the current temperature range, similar to automotive instrument clusters."
+
+security_features:
+  - id: "SEC-01"
+    name: "Session Authentication"
+    description: "Email-based login system restricting access to the Dashboard and Settings."
+  - id: "SEC-02"
+    name: "Endpoint Protection"
+    description: "All API data routes and configuration endpoints are secured behind login decorators."

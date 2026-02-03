@@ -1,0 +1,39 @@
+4. Configuration Workflow Sequence Diagram (config_sequence.puml)
+Shows how the user updates the system behavior via the Web UI.
+
+@startuml config_sequence
+autonumber
+
+actor "User" as User
+participant "Browser" as UI
+participant "Flask Server" as Flask
+participant "Global Configuration" as Config
+
+== View Settings ==
+User -> UI: Click "Settings"
+UI -> Flask: GET /settings
+Flask -> Config: Read current values
+Config --> Flask: Return {hardware, logging, timing}
+Flask --> UI: Render HTML Form
+
+== Apply Changes ==
+User -> UI: Change Freq to 10Hz
+User -> UI: Toggle CSV Off
+User -> UI: Click "Save"
+UI -> Flask: POST /settings (freq=10, csv=false)
+
+Flask -> Flask: Calculate Interval (1 / 10 = 0.1s)
+Flask -> Config: Update config_timing["SAMPLING_INTERVAL"]
+Flask -> Config: Update config_logging["ENABLE_CSV_LOGGING"]
+
+Flask -> UI: Flash "Settings Saved"
+Flask -> UI: Redirect /dashboard
+
+== Runtime Effect ==
+note right of Config
+  DAQ Engine (running in background)
+  will pick up these changes 
+  on the next loop iteration.
+end note
+
+@enduml

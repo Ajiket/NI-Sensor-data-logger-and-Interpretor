@@ -1,0 +1,55 @@
+3. DAQ Workflow Sequence Diagram (daq_sequence.puml)
+Details the "Self-Healing" loop, including buffering logic and config reading.
+
+@startuml daq_sequence
+autonumber
+
+participant "DAQ Engine" as DAQ
+participant "Configuration" as Config
+participant "NI Hardware" as HW
+participant "Shared Memory" as Mem
+participant "CSV Buffer (Deque)" as Buff
+participant "Local File (CSV)" as File
+participant "Google Sheets" as Cloud
+
+loop Every SAMPLING_INTERVAL
+    DAQ -> Config: Read Hardware Params
+    DAQ -> HW: Read Channels (ai0:n)
+    HW --> DAQ: Raw Data
+    
+    DAQ -> DAQ: Process Data (Round, Check Open Circuit)
+    
+    group "Self-Healing Local Logging"
+        alt CSV Logging Enabled
+            DAQ -> Buff: Append Data Row
+            DAQ -> File: Try Write Buffer
+            alt File Locked (PermissionError)
+                File --> DAQ: Exception
+                DAQ -> DAQ: Keep Data in Buffer
+                DAQ -> Mem: Update status="CSV Locked"
+            else Success
+                DAQ -> Buff: Clear Written Rows
+            end
+        end
+    end
+
+    group "Resilient Cloud Logging"
+        alt Cloud Logging Enabled
+            alt Worksheet is None (Prev Failure)
+                DAQ -> Cloud: Attempt Reconnect
+            end
+            
+            DAQ -> Cloud: Append Row
+            alt Network Error
+                Cloud --> DAQ: Exception
+                DAQ -> DAQ: Set Worksheet = None
+                DAQ -> Mem: Update status="Cloud Disconnected"
+            end
+        end
+    end
+
+    DAQ -> Mem: Update Latest Data (Timestamp, Values)
+    DAQ -> DAQ: Sleep(Interval - Elapsed)
+end
+
+@enduml

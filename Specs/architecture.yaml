@@ -1,0 +1,24 @@
+﻿```yaml
+# architecture.yaml
+configuration_entities:
+  # These dictionaries must be mutable at runtime via the Settings UI
+  config_hardware:
+    DEVICE_NAME: "cDAQ1Mod1"
+    CHANNELS_STR: "ai0:3"
+    NUM_CHANNELS: 4
+    TC_TYPE: "ThermocoupleType.K" # Default
+  
+  config_logging:
+    ENABLE_CSV_LOGGING: True
+    ENABLE_GOOGLE_SHEETS: True
+  
+  config_timing:
+    SAMPLING_INTERVAL: 2.0
+    DECIMAL_PLACES: 2
+    ENABLE_HIGH_SPEED: False
+  
+  security:
+    ALLOWED_USERS: ["admin@company.com", "engineer@lab.com"]
+
+dependencies: ["nidaqmx", "flask", "gspread", "google-auth"]
+```

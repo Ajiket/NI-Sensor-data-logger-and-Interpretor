@@ -1,0 +1,38 @@
+﻿```yaml
+# ux_design.yaml
+layout_structure:
+  views:
+    login_view:
+      title: "Sensor Access"
+      components: ["Centered Card", "Email Input", "Submit Button"]
+    dashboard_view:
+      header: ["App Title", "User Info", "Settings Link", "Logout Link"]
+      status_bar: ["Connection Status", "Timestamp", "Buffer Warning"]
+      sensor_grid: ["Responsive Sensor Cards"]
+    
+    settings_view:
+      title: "System Configuration"
+      form_elements:
+        - label: "Number of Thermocouples"
+          type: "Input (Number, min=1, max=16)"
+        - label: "Thermocouple Type"
+          type: "Select Dropdown (Options: K, J, T, E)"
+        - label: "Sampling Frequency (Hz)"
+          type: "Input (Number, step=0.1)"
+        - label: "Logging Targets"
+          type: "Checkbox Group (CSV Logging, Google Sheets)"
+      actions:
+        - "Save & Apply Button (Green)"
+        - "Back to Dashboard Link"
+
+interaction_model:
+  auto_refresh:
+    mechanism: "JavaScript `setInterval` (2000ms)"
+    action: "Fetch JSON from `/api/data`"
+    dom_update: "Update innerText of IDs"
+  
+  configuration_flow:
+    action: "POST /settings"
+    feedback: "Flash message 'Settings Saved'"
+    transition: "Redirect to Dashboard"
+```

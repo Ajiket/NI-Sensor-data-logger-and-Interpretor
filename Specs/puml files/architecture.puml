@@ -1,0 +1,70 @@
+2. System Architecture & Class Diagram (architecture.puml)
+Represents the code structure, global configuration entities, and shared memory model.
+
+@startuml architecture_diagram
+skinparam classAttributeIconSize 0
+
+package "Global State (Shared Memory)" {
+    class Configuration <<Dictionary>> {
+        + config_hardware : Dict
+        + config_logging : Dict
+        + config_timing : Dict
+    }
+    
+    class SharedData <<Dictionary>> {
+        + timestamp : String
+        + sensors : List
+        + status : String
+        + buffer_size : Integer
+    }
+    
+    class CSV_Buffer <<Deque>> {
+        + append(row)
+        + popleft()
+    }
+}
+
+package "Processes" {
+    class DAQ_Engine <<Daemon Thread>> {
+        - nidaqmx_task : Task
+        - worksheet : GSpread.Worksheet
+        + run()
+        - connect_to_cloud()
+        - handle_csv_write()
+    }
+
+    class Web_Server <<Flask Main Thread>> {
+        + route_login()
+        + route_dashboard()
+        + route_settings()
+        + route_api_data()
+    }
+}
+
+package "External Hardware/Services" {
+    class NI_Hardware {
+        + cDAQ1Mod1
+    }
+    class Google_Cloud {
+        + Sheets API
+    }
+    class Local_FS {
+        + thermocouple_data.csv
+    }
+}
+
+' Relationships
+Web_Server ..> Configuration : Reads/Writes (via Settings)
+DAQ_Engine ..> Configuration : Reads (Runtime)
+
+DAQ_Engine --> SharedData : Updates
+Web_Server --> SharedData : Reads (via API)
+
+DAQ_Engine --> CSV_Buffer : Pushes (on Lock)
+DAQ_Engine --> CSV_Buffer : Pops (on Retry)
+
+DAQ_Engine --> NI_Hardware : Reads
+DAQ_Engine --> Google_Cloud : Uploads
+DAQ_Engine --> Local_FS : Writes
+
+@enduml
