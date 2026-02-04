@@ -62,6 +62,11 @@ class GlobalConfig:
             "CLOUD_RECONNECT_INTERVAL": 60.0
         }
         
+        # config_ui: UI customization (v2.4)
+        self.config_ui = {
+            "sensor_labels": {}  # UI-04: Custom sensor labels {Ch0: "Oven_1", Ch1: "Ambient", ...}
+        }
+        
         # security: User access control
         self.security = {
             "ALLOWED_USERS": ["admin@company.com", "engineer@lab.com"],
@@ -79,6 +84,7 @@ class GlobalConfig:
                         self.config_hardware.update(data.get("config_hardware", {}))
                         self.config_logging.update(data.get("config_logging", {}))
                         self.config_timing.update(data.get("config_timing", {}))
+                        self.config_ui.update(data.get("config_ui", {}))  # UI-04: Load sensor labels
                 print("✅ Configuration loaded from config.json")
             except Exception as e:
                 print(f"⚠️ Failed to load config.json: {e}")
@@ -88,6 +94,7 @@ class GlobalConfig:
         data = {
             "config_hardware": self.config_hardware,
             "config_logging": self.config_logging,
+            "config_ui": self.config_ui,  # UI-04: Persist sensor labels
             "config_timing": self.config_timing
         }
         try:
@@ -171,6 +178,9 @@ class SharedMemory:
         # Initialize sensor_data based on current config
         num_channels = global_config.config_hardware["NUM_CHANNELS"]
         self.sensor_data = {f"Ch{i}": None for i in range(num_channels)}
+        self.sensor_labels = {f"Ch{i}": f"TC{i+1}" for i in range(num_channels)}  # UI-04: Custom Sensor Tagging
+        self.sensor_type_map = {f"Ch{i}": global_config.config_hardware.get("TC_TYPE", "K") for i in range(num_channels)}
+        self.sensor_history = {f"Ch{i}": [] for i in range(num_channels)}  # UI-05: For trend plotting (max 100 entries)
         self.timestamp = None
         self.csv_buffer = []
         self.buffer_warning = False
@@ -182,6 +192,9 @@ class SharedMemory:
         """Reinitialize sensor data for new channel count."""
         with self.lock:
             self.sensor_data = {f"Ch{i}": None for i in range(num_channels)}
+            self.sensor_labels = {f"Ch{i}": f"TC{i+1}" for i in range(num_channels)}  # Reset labels to defaults
+            self.sensor_type_map = {f"Ch{i}": global_config.config_hardware.get("TC_TYPE", "K") for i in range(num_channels)}
+            self.sensor_history = {f"Ch{i}": [] for i in range(num_channels)}
     
     def update_sensor_data(self, channel_idx: int, value: float, is_open: bool = False):
         """Update sensor data for a specific channel."""
@@ -191,6 +204,18 @@ class SharedMemory:
                 self.sensor_data[f"Ch{channel_idx}"] = "Open"
             else:
                 self.sensor_data[f"Ch{channel_idx}"] = round(value, decimal_places)
+            
+            # UI-05: Add to trend history (keep last 100 entries)
+            if not is_open and value is not None:
+                ch_key = f"Ch{channel_idx}"
+                timestamp = self.timestamp if self.timestamp else datetime.now().isoformat()
+                self.sensor_history[ch_key].append({
+                    "timestamp": timestamp,
+                    "value": round(value, decimal_places)
+                })
+                # Keep only last 100 entries
+                if len(self.sensor_history[ch_key]) > 100:
+                    self.sensor_history[ch_key] = self.sensor_history[ch_key][-100:]
     
     def update_timestamp(self):
         """Update timestamp."""
@@ -200,12 +225,18 @@ class SharedMemory:
     def get_snapshot(self) -> Dict[str, Any]:
         """Get current snapshot of all sensor data."""
         with self.lock:
+            # Calculate average temperature across all open channels
+            temp_values = [v for k, v in self.sensor_data.items() if isinstance(v, (int, float))]
+            avg_temperature = sum(temp_values) / len(temp_values) if temp_values else None
+            
             return {
                 "sensors": dict(self.sensor_data),
+                "labels": dict(self.sensor_labels),  # UI-04: Include custom labels
                 "timestamp": self.timestamp,
                 "connection_status": self.connection_status,
                 "buffer_warning": self.buffer_warning,
                 "last_cloud_sync": self.last_cloud_sync,
+                "avg_temperature": round(avg_temperature, global_config.config_timing["DECIMAL_PLACES"]) if avg_temperature else None,  # UI-05: Average for inference panel
             }
     
     def add_to_csv_buffer(self, row: Dict[str, Any]):
@@ -233,6 +264,24 @@ class SharedMemory:
             # Keep only last 50 errors
             if len(self.error_log) > 50:
                 self.error_log = self.error_log[-50:]
+    
+    def set_sensor_label(self, channel_key: str, label: str):
+        """UI-04: Set custom label for a sensor."""
+        with self.lock:
+            if channel_key in self.sensor_labels:
+                self.sensor_labels[channel_key] = label
+    
+    def get_sensor_label(self, channel_key: str) -> str:
+        """UI-04: Get custom label for a sensor."""
+        with self.lock:
+            return self.sensor_labels.get(channel_key, f"TC{channel_key}")
+    
+    def get_trend_data(self, channel_key: str, limit: int = 100) -> List[Dict[str, Any]]:
+        """UI-05: Get trend history for a sensor (time-series data)."""
+        with self.lock:
+            if channel_key in self.sensor_history:
+                return self.sensor_history[channel_key][-limit:]
+            return []
 
 
 # Initialize shared memory
@@ -598,6 +647,53 @@ def api_errors():
     return jsonify({"errors": errors})
 
 
+@app.route("/api/sensors/tag", methods=["POST"])
+@login_required
+def api_sensors_tag():
+    """UI-04: API endpoint for setting custom sensor labels."""
+    try:
+        data = request.get_json()
+        channel_key = data.get("channel")  # e.g., "Ch0"
+        label = data.get("label", "").strip()
+        
+        if not channel_key or not label:
+            return jsonify({"error": "Missing channel or label"}), 400
+        
+        # Update label in shared memory
+        shared_memory.set_sensor_label(channel_key, label)
+        
+        # Persist to config
+        sensor_labels = global_config.config_ui.get("sensor_labels", {})
+        sensor_labels[channel_key] = label
+        global_config.update_config("config_ui", {"sensor_labels": sensor_labels})
+        
+        logger.info(f"Sensor label updated: {channel_key} -> {label}")
+        return jsonify({"success": True, "message": f"Label updated: {label}"})
+    
+    except Exception as e:
+        logger.error(f"Error updating sensor label: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
+@app.route("/api/trends/<channel>", methods=["GET"])
+@login_required
+def api_trends(channel):
+    """UI-05: API endpoint for trend data (time-series)."""
+    try:
+        channel_key = f"Ch{channel}" if not channel.startswith("Ch") else channel
+        trend_data = shared_memory.get_trend_data(channel_key)
+        
+        return jsonify({
+            "channel": channel_key,
+            "label": shared_memory.get_sensor_label(channel_key),
+            "data": trend_data
+        })
+    
+    except Exception as e:
+        logger.error(f"Error retrieving trend data: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/settings", methods=["GET", "POST"])
 @login_required
 def settings():
@@ -919,7 +1015,7 @@ DASHBOARD_TEMPLATE = """
         /* Sensor Grid */
         .sensor-grid {
             display: grid;
-            grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+            grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
             gap: 20px;
             margin-bottom: 40px;
         }
@@ -930,6 +1026,8 @@ DASHBOARD_TEMPLATE = """
             padding: 20px;
             box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
             transition: box-shadow 0.3s, transform 0.3s;
+            position: relative;
+            min-height: 300px;
         }
         
         .sensor-card:hover {
@@ -938,32 +1036,58 @@ DASHBOARD_TEMPLATE = """
         }
         
         .sensor-card h3 {
-            font-size: 14px;
+            font-size: 12px;
             color: #7f8c8d;
-            margin-bottom: 10px;
+            margin-bottom: 5px;
             font-weight: 500;
             text-transform: uppercase;
         }
         
-        .sensor-value {
-            font-size: 36px;
-            font-weight: 700;
+        .sensor-label {
+            font-size: 16px;
+            font-weight: 600;
             color: #2c3e50;
+            margin-bottom: 15px;
+        }
+        
+        /* UI-06: Gauge Visualization */
+        .gauge-container {
+            width: 100%;
+            height: 180px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
             margin-bottom: 10px;
         }
         
+        .gauge-svg {
+            width: 100%;
+            height: 100%;
+        }
+        
+        .sensor-value {
+            font-size: 28px;
+            font-weight: 700;
+            color: #2c3e50;
+            text-align: center;
+            margin-bottom: 5px;
+        }
+        
         .sensor-unit {
-            font-size: 14px;
+            font-size: 12px;
             color: #95a5a6;
+            text-align: center;
         }
         
         .sensor-status {
             display: inline-block;
             padding: 4px 8px;
             border-radius: 4px;
-            font-size: 12px;
+            font-size: 11px;
             font-weight: 600;
             margin-top: 10px;
+            width: 100%;
+            text-align: center;
         }
         
         .sensor-status.ok {
@@ -981,6 +1105,71 @@ DASHBOARD_TEMPLATE = """
             color: #721c24;
         }
         
+        /* UI-05: Trend Plot Section */
+        .trends-section {
+            background: white;
+            border-radius: 8px;
+            padding: 20px;
+            box-shadow: 0 2px 8px rgba(0, 0, 0, 0.1);
+            margin-bottom: 40px;
+        }
+        
+        .trends-section h2 {
+            font-size: 18px;
+            font-weight: 600;
+            color: #2c3e50;
+            margin-bottom: 20px;
+        }
+        
+        .trends-container {
+            display: grid;
+            grid-template-columns: 1fr 1fr;
+            gap: 20px;
+        }
+        
+        .trend-chart-wrapper {
+            background: white;
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid #ecf0f1;
+        }
+        
+        .trend-chart {
+            position: relative;
+            height: 300px;
+        }
+        
+        .inference-panel {
+            background: #f8f9fa;
+            border-radius: 8px;
+            padding: 15px;
+            border: 1px solid #ecf0f1;
+        }
+        
+        .inference-item {
+            display: flex;
+            justify-content: space-between;
+            align-items: center;
+            padding: 10px 0;
+            border-bottom: 1px solid #ecf0f1;
+        }
+        
+        .inference-item:last-child {
+            border-bottom: none;
+        }
+        
+        .inference-label {
+            font-weight: 600;
+            color: #555;
+            font-size: 14px;
+        }
+        
+        .inference-value {
+            font-size: 16px;
+            font-weight: 700;
+            color: #2c3e50;
+        }
+        
         /* Footer */
         footer {
             text-align: center;
@@ -991,6 +1180,12 @@ DASHBOARD_TEMPLATE = """
         }
         
         /* Responsive */
+        @media (max-width: 1024px) {
+            .trends-container {
+                grid-template-columns: 1fr;
+            }
+        }
+        
         @media (max-width: 768px) {
             header {
                 flex-direction: column;
@@ -1033,18 +1228,117 @@ DASHBOARD_TEMPLATE = """
     
     <div class="container">
         <div class="sensor-grid" id="sensorGrid">
-            <!-- Sensor cards will be inserted here by JavaScript -->
+            <!-- Sensor cards with gauges will be inserted here by JavaScript -->
+        </div>
+        
+        <!-- UI-05: Real-Time Trend Plot Section -->
+        <div class="trends-section">
+            <h2>📊 Real-Time Trend Plot</h2>
+            <div class="trends-container">
+                <div class="trend-chart-wrapper">
+                    <div class="trend-chart">
+                        <canvas id="trendChart"></canvas>
+                    </div>
+                </div>
+                <div class="inference-panel">
+                    <h3 style="margin-bottom: 15px; color: #2c3e50;">Inference Panel</h3>
+                    <div class="inference-item">
+                        <span class="inference-label">Average Temperature:</span>
+                        <span class="inference-value" id="avgTemp">--°C</span>
+                    </div>
+                    <div class="inference-item">
+                        <span class="inference-label">Current Time:</span>
+                        <span class="inference-value" id="currentTime" style="font-size: 14px;">--:--:--</span>
+                    </div>
+                    <div class="inference-item">
+                        <span class="inference-label">Cursor Value:</span>
+                        <span class="inference-value" id="cursorValue">Hover chart</span>
+                    </div>
+                    <div class="inference-item">
+                        <span class="inference-label">Trend Direction:</span>
+                        <span class="inference-value" id="trendDirection">--</span>
+                    </div>
+                </div>
+            </div>
         </div>
     </div>
     
     <footer>
-        <p>Data updates every 2 seconds | NI Thermocouple Logger v2.1 (Configurable)</p>
+        <p>Data updates every 2 seconds | NI Thermocouple Logger v2.4 (Gauges, Trends & Tagging)</p>
     </footer>
     
+    <!-- Chart.js Library for Trend Plotting -->
+    <script src="https://cdn.jsdelivr.net/npm/chart.js@3.9.1/dist/chart.min.js"></script>
+    
     <script>
-        // FIX: Use dynamic channel count from backend
+        // Configuration
         const SENSOR_CHANNELS = {{ num_thermocouples }};
         const UPDATE_INTERVAL = 2000;  // 2 seconds
+        let trendChart = null;
+        const trendDataCache = {};  // Cache for trend data
+        
+        // Initialize trend data cache
+        for (let i = 0; i < SENSOR_CHANNELS; i++) {
+            trendDataCache[`Ch${i}`] = [];
+        }
+        
+        // Color palette for different sensors
+        const colors = [
+            '#FF6384', '#36A2EB', '#FFCE56', '#4BC0C0',
+            '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF'
+        ];
+        
+        // UI-06: Draw Gauge (Speedometer-style visualization)
+        function drawGauge(container, value, label) {
+            const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
+            svg.setAttribute('viewBox', '0 0 200 120');
+            svg.setAttribute('class', 'gauge-svg');
+            
+            const gauge = document.createElementNS('http://www.w3.org/2000/svg', 'g');
+            
+            // Background arc
+            const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            arc.setAttribute('d', 'M 20 100 A 80 80 0 0 1 180 100');
+            arc.setAttribute('stroke', '#ecf0f1');
+            arc.setAttribute('stroke-width', '8');
+            arc.setAttribute('fill', 'none');
+            gauge.appendChild(arc);
+            
+            // Value arc (0-100 scale)
+            const valueArc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
+            const normalizedValue = Math.max(0, Math.min(100, value ? (value + 50) / 1.5 : 0));  // Assume range -50 to 100°C
+            const angle = (normalizedValue / 100) * Math.PI;
+            const x = 100 + 80 * Math.cos(Math.PI - angle);
+            const y = 100 + 80 * Math.sin(Math.PI - angle);
+            valueArc.setAttribute('d', `M 20 100 A 80 80 0 0 1 ${x} ${y}`);
+            valueArc.setAttribute('stroke', normalizedValue > 66 ? '#e74c3c' : normalizedValue > 33 ? '#f39c12' : '#27ae60');
+            valueArc.setAttribute('stroke-width', '8');
+            valueArc.setAttribute('fill', 'none');
+            gauge.appendChild(valueArc);
+            
+            // Center circle
+            const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
+            circle.setAttribute('cx', '100');
+            circle.setAttribute('cy', '100');
+            circle.setAttribute('r', '5');
+            circle.setAttribute('fill', '#2c3e50');
+            gauge.appendChild(circle);
+            
+            // Needle
+            const needle = document.createElementNS('http://www.w3.org/2000/svg', 'line');
+            needle.setAttribute('x1', '100');
+            needle.setAttribute('y1', '100');
+            needle.setAttribute('x2', x);
+            needle.setAttribute('y2', y);
+            needle.setAttribute('stroke', '#2c3e50');
+            needle.setAttribute('stroke-width', '3');
+            needle.setAttribute('stroke-linecap', 'round');
+            gauge.appendChild(needle);
+            
+            svg.appendChild(gauge);
+            container.innerHTML = '';
+            container.appendChild(svg);
+        }
         
         function initializeSensorGrid() {
             const grid = document.getElementById('sensorGrid');
@@ -1056,6 +1350,8 @@ DASHBOARD_TEMPLATE = """
                 card.id = `sensor-ch${i}`;
                 card.innerHTML = `
                     <h3>Channel ${i}</h3>
+                    <div class="sensor-label" id="label-ch${i}">TC${i+1}</div>
+                    <div class="gauge-container" id="gauge-ch${i}"></div>
                     <div class="sensor-value" id="value-ch${i}">--</div>
                     <span class="sensor-unit">°C</span>
                     <div class="sensor-status" id="status-ch${i}">Disconnected</div>
@@ -1068,25 +1364,33 @@ DASHBOARD_TEMPLATE = """
             fetch('/api/data')
                 .then(response => response.json())
                 .then(data => {
-                    // Update sensor values
+                    // Update sensor values and gauges
                     for (let i = 0; i < SENSOR_CHANNELS; i++) {
                         const chKey = `Ch${i}`;
                         const value = data.sensors[chKey];
+                        const label = data.labels && data.labels[chKey] ? data.labels[chKey] : `TC${i+1}`;
                         const valueElem = document.getElementById(`value-ch${i}`);
                         const statusElem = document.getElementById(`status-ch${i}`);
+                        const labelElem = document.getElementById(`label-ch${i}`);
+                        const gaugeContainer = document.getElementById(`gauge-ch${i}`);
+                        
+                        labelElem.textContent = label;
                         
                         if (value === 'Open') {
                             valueElem.textContent = 'Open';
                             statusElem.textContent = 'Circuit Open';
                             statusElem.className = 'sensor-status open';
+                            drawGauge(gaugeContainer, null, label);
                         } else if (value === null || value === undefined || value === 'Error') {
                             valueElem.textContent = '--';
                             statusElem.textContent = 'Error';
                             statusElem.className = 'sensor-status error';
+                            drawGauge(gaugeContainer, null, label);
                         } else {
                             valueElem.textContent = typeof value === 'number' ? value.toFixed(2) : value;
                             statusElem.textContent = 'OK';
                             statusElem.className = 'sensor-status ok';
+                            drawGauge(gaugeContainer, value, label);
                         }
                     }
                     
@@ -1105,6 +1409,12 @@ DASHBOARD_TEMPLATE = """
                     if (data.timestamp) {
                         const dt = new Date(data.timestamp);
                         document.getElementById('timestamp').textContent = dt.toLocaleTimeString();
+                        document.getElementById('currentTime').textContent = dt.toLocaleTimeString();
+                    }
+                    
+                    // Update average temperature (UI-05: Inference Panel)
+                    if (data.avg_temperature !== null && data.avg_temperature !== undefined) {
+                        document.getElementById('avgTemp').textContent = data.avg_temperature.toFixed(2) + '°C';
                     }
                     
                     // Update buffer warning
@@ -1118,6 +1428,127 @@ DASHBOARD_TEMPLATE = """
                 .catch(error => {
                     console.error('Failed to fetch data:', error);
                 });
+            
+            // Fetch trend data for all channels
+            updateTrendPlot();
+        }
+        
+        function updateTrendPlot() {
+            // Fetch trend data for each channel
+            const trendPromises = [];
+            for (let i = 0; i < SENSOR_CHANNELS; i++) {
+                trendPromises.push(
+                    fetch(`/api/trends/Ch${i}`)
+                        .then(response => response.json())
+                        .then(data => {
+                            trendDataCache[`Ch${i}`] = data.data || [];
+                        })
+                        .catch(error => console.error(`Failed to fetch trend for Ch${i}:`, error))
+                );
+            }
+            
+            Promise.all(trendPromises).then(() => {
+                renderTrendChart();
+            });
+        }
+        
+        function renderTrendChart() {
+            const ctx = document.getElementById('trendChart');
+            if (!ctx) return;
+            
+            // Prepare datasets for all channels
+            const datasets = [];
+            for (let i = 0; i < SENSOR_CHANNELS; i++) {
+                const chKey = `Ch${i}`;
+                const trendData = trendDataCache[chKey] || [];
+                
+                if (trendData.length > 0) {
+                    datasets.push({
+                        label: `Ch${i}`,
+                        data: trendData.map(d => ({
+                            x: new Date(d.timestamp).toLocaleTimeString(),
+                            y: d.value
+                        })),
+                        borderColor: colors[i % colors.length],
+                        backgroundColor: colors[i % colors.length] + '20',
+                        borderWidth: 2,
+                        tension: 0.4,
+                        fill: false,
+                        pointRadius: 3,
+                        pointBackgroundColor: colors[i % colors.length]
+                    });
+                }
+            }
+            
+            // Destroy existing chart
+            if (trendChart) {
+                trendChart.destroy();
+            }
+            
+            // Create new chart
+            trendChart = new Chart(ctx, {
+                type: 'line',
+                data: {
+                    datasets: datasets
+                },
+                options: {
+                    responsive: true,
+                    maintainAspectRatio: false,
+                    plugins: {
+                        legend: {
+                            position: 'top',
+                        },
+                        title: {
+                            display: true,
+                            text: 'Temperature Trend (Last 100 samples)'
+                        }
+                    },
+                    scales: {
+                        y: {
+                            title: {
+                                display: true,
+                                text: 'Temperature (°C)'
+                            }
+                        },
+                        x: {
+                            title: {
+                                display: true,
+                                text: 'Time'
+                            }
+                        }
+                    }
+                }
+            });
+            
+            // Calculate trend direction (simple: compare last 5 points)
+            calculateTrendDirection();
+        }
+        
+        function calculateTrendDirection() {
+            let allValues = [];
+            for (let i = 0; i < SENSOR_CHANNELS; i++) {
+                const trendData = trendDataCache[`Ch${i}`] || [];
+                allValues = allValues.concat(trendData.map(d => d.value));
+            }
+            
+            if (allValues.length > 5) {
+                const recent = allValues.slice(-5);
+                const older = allValues.slice(-10, -5);
+                const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length;
+                const olderAvg = older.reduce((a, b) => a + b, 0) / older.length;
+                
+                const directionElem = document.getElementById('trendDirection');
+                if (recentAvg > olderAvg) {
+                    directionElem.textContent = '📈 Increasing';
+                    directionElem.style.color = '#e74c3c';
+                } else if (recentAvg < olderAvg) {
+                    directionElem.textContent = '📉 Decreasing';
+                    directionElem.style.color = '#3498db';
+                } else {
+                    directionElem.textContent = '➡️ Stable';
+                    directionElem.style.color = '#27ae60';
+                }
+            }
         }
         
         // Initialize on page load
@@ -1432,6 +1863,17 @@ SETTINGS_TEMPLATE = """
                     <div class="help-text">Select where to store your data</div>
                 </div>
                 
+                <!-- UI-04: Custom Sensor Tagging -->
+                <div class="form-group">
+                    <label>Custom Sensor Labels</label>
+                    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin-top: 10px;">
+                        <div id="sensor-labels-container">
+                            <!-- Sensor label inputs will be inserted here by JavaScript -->
+                        </div>
+                    </div>
+                    <div class="help-text">Assign custom names to each thermocouple (e.g., "Oven_Loc1", "Ambient", "Freezer")</div>
+                </div>
+                
                 <!-- Buttons -->
                 <div class="button-group">
                     <button type="submit" class="btn btn-success">Save & Apply</button>
@@ -1440,6 +1882,83 @@ SETTINGS_TEMPLATE = """
             </form>
         </div>
     </div>
+    
+    <script>
+        // UI-04: Initialize sensor label inputs on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            const numThermocouples = parseInt(document.getElementById('num_thermocouples').value);
+            const container = document.getElementById('sensor-labels-container');
+            container.innerHTML = '';
+            
+            for (let i = 0; i < numThermocouples; i++) {
+                const ch = `Ch${i}`;
+                const inputDiv = document.createElement('div');
+                inputDiv.style.marginBottom = '10px';
+                inputDiv.innerHTML = `
+                    <div style="display: flex; gap: 10px; align-items: center;">
+                        <label style="min-width: 80px; font-weight: 500;">Channel ${i}:</label>
+                        <input type="text" 
+                               id="label_${i}" 
+                               class="sensor-label-input"
+                               data-channel="${ch}"
+                               placeholder="e.g., TC${i+1}"
+                               style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
+                        <button type="button" 
+                                class="btn-save-label" 
+                                data-channel="${ch}"
+                                style="padding: 6px 12px; background-color: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
+                            Save Label
+                        </button>
+                    </div>
+                `;
+                container.appendChild(inputDiv);
+            }
+            
+            // Attach event listeners to "Save Label" buttons
+            document.querySelectorAll('.btn-save-label').forEach(btn => {
+                btn.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    const channel = this.dataset.channel;
+                    const inputId = `label_${channel.substring(2)}`;
+                    const label = document.getElementById(inputId).value.trim();
+                    
+                    if (!label) {
+                        alert('Please enter a label');
+                        return;
+                    }
+                    
+                    // Send to API
+                    fetch('/api/sensors/tag', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        },
+                        body: JSON.stringify({
+                            channel: channel,
+                            label: label
+                        })
+                    })
+                    .then(response => response.json())
+                    .then(data => {
+                        if (data.success) {
+                            alert(data.message);
+                        } else {
+                            alert('Error: ' + data.error);
+                        }
+                    })
+                    .catch(error => {
+                        console.error('Error:', error);
+                        alert('Failed to save label');
+                    });
+                });
+            });
+            
+            // Update labels when thermocouple count changes
+            document.getElementById('num_thermocouples').addEventListener('change', function() {
+                location.reload();
+            });
+        });
+    </script>
 </body>
 </html>
 """
