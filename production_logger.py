@@ -17,6 +17,7 @@ import csv
 import json
 import logging
 import os
+import re
 from datetime import datetime
 from pathlib import Path
 from typing import List, Dict, Optional, Any
@@ -55,6 +56,7 @@ class GlobalConfig:
             "CSV_FOLDER": "./Data",  # NEW v2.5: Configurable output folder
             "CSV_FILENAME": "thermocouple_data.csv",  # NEW v2.5: Configurable filename
             "GOOGLE_SHEETS_LINK": "",  # NEW v2.5: User-provided Sheets link (optional)
+            "TEST_SESSION_NAME": "",  # NEW v2.6: Name of test for config file generation
         }
         
         # config_timing: Sampling and precision settings
@@ -511,6 +513,54 @@ class DAQEngine:
             logger.error(f"CSV write error: {e}")
             self.shared_mem.log_error(f"CSV write failed: {e}")
     
+    def save_test_config_file(self):
+        """NEW v2.6: Save test configuration snapshot to [test_name].config file in CSV_FOLDER.
+        
+        This method is called when Settings are saved. It creates a JSON configuration file
+        that captures the complete test setup for reproducibility.
+        
+        Returns: True if successful, False otherwise
+        """
+        config_logging = global_config.get_config("config_logging")
+        test_name = config_logging.get("TEST_SESSION_NAME", "").strip()
+        
+        # Only save if test_name is provided
+        if not test_name:
+            logger.debug("TEST_SESSION_NAME not set, skipping config file generation")
+            return True
+        
+        try:
+            csv_folder = config_logging.get("CSV_FOLDER", "./Data")
+            config_file_path = Path(csv_folder) / f"{test_name}.config"
+            
+            # Prepare full configuration snapshot including all sections
+            config_snapshot = {
+                "test_metadata": {
+                    "session_name": test_name,
+                    "created_at": datetime.now().isoformat(),
+                    "created_by": session.get("user", "unknown"),
+                    "version": "2.6"
+                },
+                "config_hardware": global_config.config_hardware.copy(),
+                "config_logging": global_config.config_logging.copy(),
+                "config_timing": global_config.config_timing.copy(),
+                "sensor_labels": global_config.config_ui.get("sensor_labels", {}).copy()
+            }
+            
+            # Write configuration file as JSON with pretty printing
+            with open(config_file_path, 'w', encoding='utf-8') as f:
+                json.dump(config_snapshot, f, indent=2, default=str)
+            
+            logger.info(f"Test config snapshot saved to {config_file_path}")
+            return True
+            
+        except PermissionError:
+            logger.warning(f"Permission denied writing config file to {csv_folder}")
+            return False
+        except Exception as e:
+            logger.error(f"Failed to save test config file: {e}")
+            return False
+    
     def _upload_to_cloud(self):
         """Step 5: Attempt Cloud Upload (if Sheets enabled). If fail, set worksheet=None.
         
@@ -931,6 +981,17 @@ def settings():
             csv_filename = request.form.get("csv_filename", "thermocouple_data.csv").strip()
             google_sheets_link = request.form.get("google_sheets_link", "").strip()
             
+            # NEW v2.6: Get and validate test session name (CONFIG-09)
+            test_name = request.form.get("test_name", "").strip()
+            if test_name:
+                # Validate test_name: alphanumeric + underscores only
+                if not re.match(r'^[a-zA-Z0-9_]+$', test_name):
+                    flash("Test Name must contain only alphanumeric characters and underscores", "error")
+                    return redirect(url_for("settings"))
+                if len(test_name) > 100:
+                    flash("Test Name must be 100 characters or less", "error")
+                    return redirect(url_for("settings"))
+            
             # Validate CSV folder (reject dangerous paths)
             if ".." in csv_folder or "System" in csv_folder or "Windows" in csv_folder:
                 flash("Invalid CSV folder path (cannot contain .., System, or Windows)", "error")
@@ -957,6 +1018,7 @@ def settings():
                 "CSV_FOLDER": csv_folder,  # NEW v2.5
                 "CSV_FILENAME": csv_filename,  # NEW v2.5
                 "GOOGLE_SHEETS_LINK": google_sheets_link,  # NEW v2.5
+                "TEST_SESSION_NAME": test_name,  # NEW v2.6
             })
             
             global_config.update_config("config_timing", {
@@ -973,6 +1035,14 @@ def settings():
             
             logger.info(f"Settings updated: {num_thermocouples} channels, TC Type {tc_type}, "
                        f"Interval {sampling_interval:.2f}s, CSV={enable_csv}, Sheets={enable_sheets}")
+            
+            # NEW v2.6: Save test configuration snapshot if test_name provided
+            if test_name:
+                temp_daq_engine = DAQEngine(shared_memory)
+                if temp_daq_engine.save_test_config_file():
+                    logger.info(f"Config snapshot saved for test: {test_name}")
+                else:
+                    logger.warning(f"Failed to save config snapshot for test: {test_name}")
             
             flash("Settings Saved Successfully", "success")
             return redirect(url_for("dashboard"))
@@ -1005,6 +1075,7 @@ def settings():
         csv_folder=logging_config.get("CSV_FOLDER", "./Data"),  # NEW v2.5
         csv_filename=logging_config.get("CSV_FILENAME", "thermocouple_data.csv"),  # NEW v2.5
         google_sheets_link=logging_config.get("GOOGLE_SHEETS_LINK", ""),  # NEW v2.5
+        test_session_name=logging_config.get("TEST_SESSION_NAME", ""),  # NEW v2.6
         daq_running=daq_control_state.is_running(),  # NEW v2.5: Pass DAQ state to template
     )
 
@@ -2132,6 +2203,20 @@ SETTINGS_TEMPLATE = """
             {% endwith %}
             
             <form method="POST" action="/settings">
+                <!-- Name of the Test (CONFIG-09) - NEW v2.6 -->
+                <div class="form-group">
+                    <label for="test_name">Name of the Test</label>
+                    <input type="text" 
+                           id="test_name" 
+                           name="test_name" 
+                           value="{{ test_session_name }}" 
+                           placeholder="e.g., Calibration_Test_001"
+                           pattern="[a-zA-Z0-9_]+"
+                           maxlength="100"
+                           title="Alphanumeric characters and underscores only">
+                    <div class="help-text">Unique identifier for this test session (alphanumeric + underscores, max 100 chars). A .config file will be generated with this name.</div>
+                </div>
+                
                 <!-- Number of Thermocouples (CONFIG-01) -->
                 <div class="form-group">
                     <label for="num_thermocouples">Number of Thermocouples</label>
