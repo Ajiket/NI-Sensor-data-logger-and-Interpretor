@@ -44,8 +44,8 @@ class GlobalConfig:
         # config_hardware: Device and channel specifications
         self.config_hardware = {
             "DEVICE_NAME": "cDAQ1Mod1",
-            "CHANNELS_STR": "ai0:3",
-            "NUM_CHANNELS": 4,
+            "CHANNELS_STR": "ai0:2",
+            "NUM_CHANNELS": 3,
             "TC_TYPE": "K",  # K, J, T, or E
         }
         
@@ -62,14 +62,15 @@ class GlobalConfig:
         # config_timing: Sampling and precision settings
         self.config_timing = {
             "SAMPLING_INTERVAL": 2.0,  # seconds
-            "DECIMAL_PLACES": 2,
+            "DECIMAL_PLACES": 3,  # NEW v2.7: Changed from 2 to 3 decimal places for CSV logging
             "ENABLE_HIGH_SPEED": False,
             "CLOUD_RECONNECT_INTERVAL": 60.0
         }
         
-        # config_ui: UI customization (v2.4)
+        # config_ui: UI customization (v2.4 and v2.7)
         self.config_ui = {
-            "sensor_labels": {}  # UI-04: Custom sensor labels {Ch0: "Oven_1", Ch1: "Ambient", ...}
+            "sensor_labels": {},  # UI-04: Custom sensor labels {Ch0: "Oven_1", Ch1: "Ambient", ...}
+            "sensor_ranges": {}   # UI-07: User-defined min/max ranges {Ch0: {min: -50, max: 200}, ...}
         }
         
         # security: User access control
@@ -89,10 +90,29 @@ class GlobalConfig:
                         self.config_hardware.update(data.get("config_hardware", {}))
                         self.config_logging.update(data.get("config_logging", {}))
                         self.config_timing.update(data.get("config_timing", {}))
-                        self.config_ui.update(data.get("config_ui", {}))  # UI-04: Load sensor labels
+                        self.config_ui.update(data.get("config_ui", {}))  # UI-04: Load sensor labels & ranges
                 print("✅ Configuration loaded from config.json")
             except Exception as e:
                 print(f"⚠️ Failed to load config.json: {e}")
+        
+        # NEW v2.7: Initialize default ranges if missing
+        self._ensure_sensor_ranges()
+    
+    def _ensure_sensor_ranges(self):
+        """NEW v2.7: Ensure sensor_ranges exists with defaults for all channels."""
+        num_channels = self.config_hardware["NUM_CHANNELS"]
+        if "sensor_ranges" not in self.config_ui:
+            self.config_ui["sensor_ranges"] = {}
+        
+        # Add default ranges for any missing channels
+        for i in range(num_channels):
+            ch_key = f"Ch{i}"
+            if ch_key not in self.config_ui["sensor_ranges"]:
+                self.config_ui["sensor_ranges"][ch_key] = {
+                    "min": -50,
+                    "max": 100
+                }
+
     
     def save_to_disk(self):
         """Save current configuration to JSON file."""
@@ -243,13 +263,16 @@ class SharedMemory:
             self.sensor_history = {f"Ch{i}": [] for i in range(num_channels)}
     
     def update_sensor_data(self, channel_idx: int, value: float, is_open: bool = False):
-        """Update sensor data for a specific channel."""
+        """Update sensor data for a specific channel.
+        
+        NEW v2.7: Enforces 3 decimal places for all stored values.
+        """
         with self.lock:
-            decimal_places = global_config.config_timing["DECIMAL_PLACES"]
             if is_open:
                 self.sensor_data[f"Ch{channel_idx}"] = "Open"
             else:
-                self.sensor_data[f"Ch{channel_idx}"] = round(value, decimal_places)
+                # NEW v2.7: Always use 3 decimal places for consistency
+                self.sensor_data[f"Ch{channel_idx}"] = round(value, 3)
             
             # UI-05: Add to trend history (keep last 100 entries)
             if not is_open and value is not None:
@@ -257,7 +280,7 @@ class SharedMemory:
                 timestamp = self.timestamp if self.timestamp else datetime.now().isoformat()
                 self.sensor_history[ch_key].append({
                     "timestamp": timestamp,
-                    "value": round(value, decimal_places)
+                    "value": round(value, 3)
                 })
                 # Keep only last 100 entries
                 if len(self.sensor_history[ch_key]) > 100:
@@ -282,7 +305,7 @@ class SharedMemory:
                 "connection_status": self.connection_status,
                 "buffer_warning": self.buffer_warning,
                 "last_cloud_sync": self.last_cloud_sync,
-                "avg_temperature": round(avg_temperature, global_config.config_timing["DECIMAL_PLACES"]) if avg_temperature else None,  # UI-05: Average for inference panel
+                "avg_temperature": round(avg_temperature, 3) if avg_temperature else None,  # NEW v2.7: 3 decimal places
             }
     
     def add_to_csv_buffer(self, row: Dict[str, Any]):
@@ -412,15 +435,36 @@ class DAQEngine:
             self.task = None
     
     def _read_hardware(self) -> List[float]:
-        """Step 1: Read Hardware based on current CONFIG state."""
+        """Step 1: Read Hardware based on current CONFIG state.
+        
+        CRITICAL FIX: For multi-channel thermocouple reads, call task.read() without
+        number_of_samples_per_channel parameter. This ensures all channels are read
+        and returned as a flat list [ch0, ch1, ch2, ...].
+        """
         try:
-            values = self.task.read(number_of_samples_per_channel=1)
-            # Flatten list if needed
-            if isinstance(values[0], list):
-                return values[0]
-            return values
+            values = self.task.read()  # No number_of_samples_per_channel parameter!
+            
+            # Ensure values is always a list
+            if not isinstance(values, list):
+                values = [values]
+            
+            # Verify we got the expected number of channels
+            num_channels = global_config.config_hardware["NUM_CHANNELS"]
+            if len(values) != num_channels:
+                logger.warning(f"⚠️ Channel count mismatch: Expected {num_channels}, "
+                             f"but got {len(values)}. Values read: {values}. Padding...")
+                while len(values) < num_channels:
+                    values.append(None)
+            
+            # Log first read for diagnostics
+            if not hasattr(self, '_first_read'):
+                self._first_read = True
+                logger.info(f"✅ First read successful: {len(values)} channels = {values}")
+            
+            return values[:num_channels]  # Return only first N channels
+            
         except Exception as e:
-            logger.error(f"Hardware read error: {e}")
+            logger.error(f"❌ Hardware read error: {e}")
             self.shared_mem.log_error(f"Hardware read failed: {e}")
             num_channels = global_config.config_hardware["NUM_CHANNELS"]
             return [None] * num_channels
@@ -438,7 +482,10 @@ class DAQEngine:
         return processed
     
     def _push_to_csv_buffer(self, processed_data: Dict[str, Any]):
-        """Step 3: Push to CSV Buffer (if CSV enabled)."""
+        """Step 3: Push to CSV Buffer (if CSV enabled).
+        
+        NEW v2.7: Forces 3 decimal places for all CSV values.
+        """
         config_logging = global_config.get_config("config_logging")
         if not config_logging.get("ENABLE_CSV_LOGGING"):
             return
@@ -453,13 +500,19 @@ class DAQEngine:
         
         num_channels = global_config.config_hardware["NUM_CHANNELS"]
         row = {"date": date_str, "time": time_str}
+        
+        # Ensure all channels are added to the CSV row, even if missing from processed_data
         for ch_idx in range(num_channels):
             if ch_idx in processed_data:
                 ch_data = processed_data[ch_idx]
                 if ch_data["is_open"]:
                     row[f"Ch{ch_idx}"] = "Open"
                 else:
-                    row[f"Ch{ch_idx}"] = ch_data["value"]
+                    # NEW v2.7: Enforce 3 decimal places for CSV logging
+                    row[f"Ch{ch_idx}"] = round(ch_data["value"], 3)
+            else:
+                # Channel data is missing - mark as error
+                row[f"Ch{ch_idx}"] = "Error"
         
         self.shared_mem.add_to_csv_buffer(row)
     
@@ -813,6 +866,32 @@ def api_sensors_tag():
         return jsonify({"error": str(e)}), 500
 
 
+@app.route("/api/ranges", methods=["GET"])
+@login_required
+def api_ranges():
+    """NEW v2.7: API endpoint for fetching sensor labels and ranges."""
+    try:
+        config_ui = global_config.config_ui
+        sensor_labels = config_ui.get("sensor_labels", {})
+        sensor_ranges = config_ui.get("sensor_ranges", {})
+        
+        # Ensure all channels have ranges (backward compatibility)
+        num_channels = global_config.config_hardware["NUM_CHANNELS"]
+        for i in range(num_channels):
+            ch_key = f"Ch{i}"
+            if ch_key not in sensor_ranges:
+                sensor_ranges[ch_key] = {"min": -50, "max": 100}
+        
+        return jsonify({
+            "sensor_labels": sensor_labels,
+            "sensor_ranges": sensor_ranges
+        }), 200
+    
+    except Exception as e:
+        logger.error(f"Error retrieving sensor ranges: {e}")
+        return jsonify({"error": str(e)}), 500
+
+
 @app.route("/api/trends/<channel>", methods=["GET"])
 @login_required
 def api_trends(channel):
@@ -1005,6 +1084,42 @@ def settings():
             # Convert Frequency (Hz) to Interval (seconds)
             sampling_interval = 1.0 / sampling_freq
             
+            # NEW v2.7: Parse sensor labels and ranges from form (list inputs)
+            labels_input = request.form.getlist("labels")
+            min_temps_input = request.form.getlist("min_temps")
+            max_temps_input = request.form.getlist("max_temps")
+            
+            # Build sensor_labels and sensor_ranges dicts
+            sensor_labels = {}
+            sensor_ranges = {}
+            
+            for i in range(num_thermocouples):
+                ch_key = f"Ch{i}"
+                
+                # Parse label
+                label = labels_input[i].strip() if i < len(labels_input) else f"TC{i+1}"
+                if not label:
+                    label = f"TC{i+1}"
+                sensor_labels[ch_key] = label
+                
+                # Parse and validate min/max temps
+                try:
+                    min_temp = float(min_temps_input[i]) if i < len(min_temps_input) else -50
+                    max_temp = float(max_temps_input[i]) if i < len(max_temps_input) else 100
+                    
+                    # Validate range
+                    if min_temp >= max_temp:
+                        flash(f"Channel {i}: Min temperature must be less than Max temperature", "error")
+                        return redirect(url_for("settings"))
+                    
+                    sensor_ranges[ch_key] = {
+                        "min": round(min_temp, 2),
+                        "max": round(max_temp, 2)
+                    }
+                except (ValueError, IndexError):
+                    sensor_ranges[ch_key] = {"min": -50, "max": 100}
+
+            
             # Update Global Configuration Dictionary
             global_config.update_config("config_hardware", {
                 "NUM_CHANNELS": num_thermocouples,
@@ -1023,6 +1138,12 @@ def settings():
             
             global_config.update_config("config_timing", {
                 "SAMPLING_INTERVAL": sampling_interval,
+            })
+            
+            # NEW v2.7: Update sensor labels and ranges in config_ui
+            global_config.update_config("config_ui", {
+                "sensor_labels": sensor_labels,
+                "sensor_ranges": sensor_ranges
             })
             
             # Reinitialize sensor data
@@ -1595,6 +1716,7 @@ DASHBOARD_TEMPLATE = """
         const UPDATE_INTERVAL = 2000;  // 2 seconds
         let trendChart = null;
         const trendDataCache = {};  // Cache for trend data
+        let sensorRanges = {};  // NEW v2.7: Cache for sensor ranges
         
         // Initialize trend data cache
         for (let i = 0; i < SENSOR_CHANNELS; i++) {
@@ -1607,15 +1729,16 @@ DASHBOARD_TEMPLATE = """
             '#9966FF', '#FF9F40', '#FF6384', '#C9CBCF'
         ];
         
-        // UI-06: Draw Gauge (Speedometer-style visualization)
-        function drawGauge(container, value, label) {
+        // UI-06: Draw Gauge (Speedometer-style visualization with dynamic ranges)
+        // NEW v2.7: Now accepts min/max parameters for user-defined ranges
+        function drawGauge(container, value, label, minRange = -50, maxRange = 100) {
             const svg = document.createElementNS('http://www.w3.org/2000/svg', 'svg');
-            svg.setAttribute('viewBox', '0 0 200 120');
+            svg.setAttribute('viewBox', '0 0 200 140');
             svg.setAttribute('class', 'gauge-svg');
             
             const gauge = document.createElementNS('http://www.w3.org/2000/svg', 'g');
             
-            // Background arc
+            // Background arc (180 degrees from 20,100 to 180,100)
             const arc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
             arc.setAttribute('d', 'M 20 100 A 80 80 0 0 1 180 100');
             arc.setAttribute('stroke', '#ecf0f1');
@@ -1623,14 +1746,29 @@ DASHBOARD_TEMPLATE = """
             arc.setAttribute('fill', 'none');
             gauge.appendChild(arc);
             
-            // Value arc (0-100 scale)
+            // Calculate normalized value based on user-defined range
+            let normalizedValue = 0;
+            if (value !== null && value !== undefined && value !== 'Open') {
+                const rangeSpan = maxRange - minRange;
+                normalizedValue = Math.max(0, Math.min(100, ((value - minRange) / rangeSpan) * 100));
+            }
+            
+            // Value arc (colored based on range)
             const valueArc = document.createElementNS('http://www.w3.org/2000/svg', 'path');
-            const normalizedValue = Math.max(0, Math.min(100, value ? (value + 50) / 1.5 : 0));  // Assume range -50 to 100°C
             const angle = (normalizedValue / 100) * Math.PI;
             const x = 100 + 80 * Math.cos(Math.PI - angle);
             const y = 100 + 80 * Math.sin(Math.PI - angle);
             valueArc.setAttribute('d', `M 20 100 A 80 80 0 0 1 ${x} ${y}`);
-            valueArc.setAttribute('stroke', normalizedValue > 66 ? '#e74c3c' : normalizedValue > 33 ? '#f39c12' : '#27ae60');
+            
+            // Color zones: Green (0-33%), Yellow (33-66%), Red (66-100%)
+            let arcColor = '#27ae60';  // Green
+            if (normalizedValue > 66) {
+                arcColor = '#e74c3c';  // Red
+            } else if (normalizedValue > 33) {
+                arcColor = '#f39c12';  // Yellow
+            }
+            
+            valueArc.setAttribute('stroke', arcColor);
             valueArc.setAttribute('stroke-width', '8');
             valueArc.setAttribute('fill', 'none');
             gauge.appendChild(valueArc);
@@ -1653,6 +1791,29 @@ DASHBOARD_TEMPLATE = """
             needle.setAttribute('stroke-width', '3');
             needle.setAttribute('stroke-linecap', 'round');
             gauge.appendChild(needle);
+            
+            // NEW v2.7: Display Min and Max labels at the ends of the arc
+            // Min label (left side)
+            const minText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            minText.setAttribute('x', '25');
+            minText.setAttribute('y', '105');
+            minText.setAttribute('font-size', '11');
+            minText.setAttribute('font-weight', 'bold');
+            minText.setAttribute('fill', '#555');
+            minText.setAttribute('text-anchor', 'middle');
+            minText.textContent = minRange.toFixed(0) + '°';
+            gauge.appendChild(minText);
+            
+            // Max label (right side)
+            const maxText = document.createElementNS('http://www.w3.org/2000/svg', 'text');
+            maxText.setAttribute('x', '175');
+            maxText.setAttribute('y', '105');
+            maxText.setAttribute('font-size', '11');
+            maxText.setAttribute('font-weight', 'bold');
+            maxText.setAttribute('fill', '#555');
+            maxText.setAttribute('text-anchor', 'middle');
+            maxText.textContent = maxRange.toFixed(0) + '°';
+            gauge.appendChild(maxText);
             
             svg.appendChild(gauge);
             container.innerHTML = '';
@@ -1679,70 +1840,34 @@ DASHBOARD_TEMPLATE = """
             }
         }
         
+        // FIX v2.7.1: Initialize sensor ranges on first page load
+        function initializeSensorRanges() {
+            return fetch('/api/ranges')
+                .then(response => response.json())
+                .then(rangeData => {
+                    sensorRanges = rangeData.sensor_ranges || {};
+                    // Ensure all channels have ranges (backward compatibility)
+                    for (let i = 0; i < SENSOR_CHANNELS; i++) {
+                        const ch = `Ch${i}`;
+                        if (!sensorRanges[ch]) {
+                            sensorRanges[ch] = {min: -50, max: 100};
+                        }
+                    }
+                })
+                .catch(error => {
+                    console.error('Failed to fetch ranges:', error);
+                    // Fallback: use default ranges for all channels
+                    for (let i = 0; i < SENSOR_CHANNELS; i++) {
+                        sensorRanges[`Ch${i}`] = {min: -50, max: 100};
+                    }
+                });
+        }
+        
         function updateDashboard() {
             fetch('/api/data')
                 .then(response => response.json())
                 .then(data => {
-                    // Update sensor values and gauges
-                    for (let i = 0; i < SENSOR_CHANNELS; i++) {
-                        const chKey = `Ch${i}`;
-                        const value = data.sensors[chKey];
-                        const label = data.labels && data.labels[chKey] ? data.labels[chKey] : `TC${i+1}`;
-                        const valueElem = document.getElementById(`value-ch${i}`);
-                        const statusElem = document.getElementById(`status-ch${i}`);
-                        const labelElem = document.getElementById(`label-ch${i}`);
-                        const gaugeContainer = document.getElementById(`gauge-ch${i}`);
-                        
-                        labelElem.textContent = label;
-                        
-                        if (value === 'Open') {
-                            valueElem.textContent = 'Open';
-                            statusElem.textContent = 'Circuit Open';
-                            statusElem.className = 'sensor-status open';
-                            drawGauge(gaugeContainer, null, label);
-                        } else if (value === null || value === undefined || value === 'Error') {
-                            valueElem.textContent = '--';
-                            statusElem.textContent = 'Error';
-                            statusElem.className = 'sensor-status error';
-                            drawGauge(gaugeContainer, null, label);
-                        } else {
-                            valueElem.textContent = typeof value === 'number' ? value.toFixed(2) : value;
-                            statusElem.textContent = 'OK';
-                            statusElem.className = 'sensor-status ok';
-                            drawGauge(gaugeContainer, value, label);
-                        }
-                    }
-                    
-                    // Update connection status
-                    const connStatus = document.getElementById('connectionStatus');
-                    const connText = document.getElementById('connectionText');
-                    if (data.connection_status === 'Connected') {
-                        connStatus.className = 'status-indicator connected';
-                        connText.textContent = 'Connected';
-                    } else {
-                        connStatus.className = 'status-indicator disconnected';
-                        connText.textContent = data.connection_status || 'Disconnected';
-                    }
-                    
-                    // Update timestamp
-                    if (data.timestamp) {
-                        const dt = new Date(data.timestamp);
-                        document.getElementById('timestamp').textContent = dt.toLocaleTimeString();
-                        document.getElementById('currentTime').textContent = dt.toLocaleTimeString();
-                    }
-                    
-                    // Update average temperature (UI-05: Inference Panel)
-                    if (data.avg_temperature !== null && data.avg_temperature !== undefined) {
-                        document.getElementById('avgTemp').textContent = data.avg_temperature.toFixed(2) + '°C';
-                    }
-                    
-                    // Update buffer warning
-                    const bufferWarning = document.getElementById('bufferWarning');
-                    if (data.buffer_warning) {
-                        bufferWarning.style.display = 'block';
-                    } else {
-                        bufferWarning.style.display = 'none';
-                    }
+                    updateSensorVisuals(data);
                 })
                 .catch(error => {
                     console.error('Failed to fetch data:', error);
@@ -1750,6 +1875,72 @@ DASHBOARD_TEMPLATE = """
             
             // Fetch trend data for all channels
             updateTrendPlot();
+        }
+        
+        function updateSensorVisuals(data) {
+            // Update sensor values and gauges with dynamic ranges
+            for (let i = 0; i < SENSOR_CHANNELS; i++) {
+                const chKey = `Ch${i}`;
+                const value = data.sensors[chKey];
+                const label = data.labels && data.labels[chKey] ? data.labels[chKey] : `TC${i+1}`;
+                const valueElem = document.getElementById(`value-ch${i}`);
+                const statusElem = document.getElementById(`status-ch${i}`);
+                const labelElem = document.getElementById(`label-ch${i}`);
+                const gaugeContainer = document.getElementById(`gauge-ch${i}`);
+                
+                // NEW v2.7: Get channel-specific range
+                const range = sensorRanges[chKey] || {min: -50, max: 100};
+                
+                labelElem.textContent = label;
+                
+                if (value === 'Open') {
+                    valueElem.textContent = 'Open';
+                    statusElem.textContent = 'Circuit Open';
+                    statusElem.className = 'sensor-status open';
+                    drawGauge(gaugeContainer, null, label, range.min, range.max);
+                } else if (value === null || value === undefined || value === 'Error') {
+                    valueElem.textContent = '--';
+                    statusElem.textContent = 'Error';
+                    statusElem.className = 'sensor-status error';
+                    drawGauge(gaugeContainer, null, label, range.min, range.max);
+                } else {
+                    valueElem.textContent = typeof value === 'number' ? value.toFixed(2) : value;
+                    statusElem.textContent = 'OK';
+                    statusElem.className = 'sensor-status ok';
+                    drawGauge(gaugeContainer, value, label, range.min, range.max);
+                }
+            }
+            
+            // Update connection status
+            const connStatus = document.getElementById('connectionStatus');
+            const connText = document.getElementById('connectionText');
+            if (data.connection_status === 'Connected') {
+                connStatus.className = 'status-indicator connected';
+                connText.textContent = 'Connected';
+            } else {
+                connStatus.className = 'status-indicator disconnected';
+                connText.textContent = data.connection_status || 'Disconnected';
+            }
+            
+            // Update timestamp
+            if (data.timestamp) {
+                const dt = new Date(data.timestamp);
+                document.getElementById('timestamp').textContent = dt.toLocaleTimeString();
+                document.getElementById('currentTime').textContent = dt.toLocaleTimeString();
+            }
+            
+            // Update average temperature (UI-05: Inference Panel)
+            if (data.avg_temperature !== null && data.avg_temperature !== undefined) {
+                document.getElementById('avgTemp').textContent = data.avg_temperature.toFixed(2) + '°C';
+            }
+            
+            // Update buffer warning
+            const bufferWarning = document.getElementById('bufferWarning');
+            if (data.buffer_warning) {
+                bufferWarning.style.display = 'block';
+            } else {
+                bufferWarning.style.display = 'none';
+            }
         }
         
         function updateTrendPlot() {
@@ -1913,8 +2104,15 @@ DASHBOARD_TEMPLATE = """
         // Initialize on page load
         document.addEventListener('DOMContentLoaded', function() {
             initializeSensorGrid();
-            updateDashboard();
-            updateDaqStatus();
+            // FIX v2.7.1: Fetch sensor ranges first, then update dashboard with correct ranges
+            initializeSensorRanges().then(() => {
+                updateDashboard();
+                updateDaqStatus();
+            }).catch(() => {
+                // Fallback if ranges fail to load
+                updateDashboard();
+                updateDaqStatus();
+            });
             
             // NEW v2.5: Add event listeners for Start/Stop buttons
             document.getElementById('startBtn').addEventListener('click', async function() {
@@ -2320,15 +2518,30 @@ SETTINGS_TEMPLATE = """
                 </div>
                 {% endif %}
                 
-                <!-- UI-04: Custom Sensor Tagging -->
+                <!-- UI-04 & UI-07: Custom Sensor Configuration (Labels & Ranges) -->
                 <div class="form-group">
-                    <label>Custom Sensor Labels</label>
-                    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin-top: 10px;">
-                        <div id="sensor-labels-container">
-                            <!-- Sensor label inputs will be inserted here by JavaScript -->
+                    <label>Sensor Configuration (Labels & Temperature Ranges)</label>
+                    <div style="background-color: #f8f9fa; padding: 15px; border-radius: 4px; margin-top: 10px; overflow-x: auto;">
+                        <table style="width: 100%; border-collapse: collapse; font-size: 13px;">
+                            <thead>
+                                <tr style="background-color: #e9ecef; border-bottom: 2px solid #dee2e6;">
+                                    <th style="padding: 10px; text-align: left; border-right: 1px solid #dee2e6;">Channel</th>
+                                    <th style="padding: 10px; text-align: left; border-right: 1px solid #dee2e6;">Custom Label</th>
+                                    <th style="padding: 10px; text-align: left; border-right: 1px solid #dee2e6;">Min (°C)</th>
+                                    <th style="padding: 10px; text-align: left;">Max (°C)</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                <script>
+                                    // Create table rows for each channel (populated by JavaScript below)
+                                </script>
+                            </tbody>
+                        </table>
+                        <div id="sensor-config-container" style="margin-top: 10px;">
+                            <!-- Sensor config rows will be inserted here -->
                         </div>
                     </div>
-                    <div class="help-text">Assign custom names to each thermocouple (e.g., "Oven_Loc1", "Ambient", "Freezer")</div>
+                    <div class="help-text" style="margin-top: 10px;">Configure custom labels and temperature ranges for each thermocouple. All changes are saved with the "Save & Apply" button.</div>
                 </div>
                 
                 <!-- Buttons -->
@@ -2341,78 +2554,73 @@ SETTINGS_TEMPLATE = """
     </div>
     
     <script>
-        // UI-04: Initialize sensor label inputs on page load
-        document.addEventListener('DOMContentLoaded', function() {
+        // FIX v2.7.1: Regenerate form rows when thermocouple count changes
+        // Ensures table rows are properly cleared and recreated with new count
+        function regenerateSensorConfigTable() {
             const numThermocouples = parseInt(document.getElementById('num_thermocouples').value);
-            const container = document.getElementById('sensor-labels-container');
+            const container = document.getElementById('sensor-config-container');
+            
+            // IMPORTANT: Clear container completely to avoid duplication
             container.innerHTML = '';
             
-            for (let i = 0; i < numThermocouples; i++) {
-                const ch = `Ch${i}`;
-                const inputDiv = document.createElement('div');
-                inputDiv.style.marginBottom = '10px';
-                inputDiv.innerHTML = `
-                    <div style="display: flex; gap: 10px; align-items: center;">
-                        <label style="min-width: 80px; font-weight: 500;">Channel ${i}:</label>
-                        <input type="text" 
-                               id="label_${i}" 
-                               class="sensor-label-input"
-                               data-channel="${ch}"
-                               placeholder="e.g., TC${i+1}"
-                               style="flex: 1; padding: 8px; border: 1px solid #ddd; border-radius: 4px;">
-                        <button type="button" 
-                                class="btn-save-label" 
-                                data-channel="${ch}"
-                                style="padding: 6px 12px; background-color: #17a2b8; color: white; border: none; border-radius: 4px; cursor: pointer; font-size: 12px;">
-                            Save Label
-                        </button>
-                    </div>
-                `;
-                container.appendChild(inputDiv);
-            }
-            
-            // Attach event listeners to "Save Label" buttons
-            document.querySelectorAll('.btn-save-label').forEach(btn => {
-                btn.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    const channel = this.dataset.channel;
-                    const inputId = `label_${channel.substring(2)}`;
-                    const label = document.getElementById(inputId).value.trim();
+            fetch('/api/ranges')
+                .then(response => response.json())
+                .then(data => {
+                    const ranges = data.sensor_ranges || {};
+                    const labels = data.sensor_labels || {};
                     
-                    if (!label) {
-                        alert('Please enter a label');
-                        return;
+                    // Build table rows based on CURRENT thermocouple count
+                    let tableHtml = '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+                    tableHtml += '<thead><tr style="background-color: #e9ecef; border-bottom: 2px solid #dee2e6;">';
+                    tableHtml += '<th style="padding: 10px; text-align: left; border-right: 1px solid #dee2e6;">Channel</th>';
+                    tableHtml += '<th style="padding: 10px; text-align: left; border-right: 1px solid #dee2e6;">Custom Label</th>';
+                    tableHtml += '<th style="padding: 10px; text-align: left; border-right: 1px solid #dee2e6;">Min (°C)</th>';
+                    tableHtml += '<th style="padding: 10px; text-align: left;">Max (°C)</th>';
+                    tableHtml += '</tr></thead><tbody>';
+                    
+                    // Generate exactly numThermocouples rows
+                    for (let i = 0; i < numThermocouples; i++) {
+                        const ch = `Ch${i}`;
+                        const label = labels[ch] || `TC${i+1}`;
+                        const range = ranges[ch] || {min: -50, max: 100};
+                        
+                        tableHtml += `<tr style="border-bottom: 1px solid #dee2e6;"><td style="padding: 10px; border-right: 1px solid #dee2e6; font-weight: 600; background-color: #f8f9fa;">Ch${i}</td><td style="padding: 10px; border-right: 1px solid #dee2e6;"><input type="text" name="labels" value="${label}" placeholder="e.g., Oven_1" style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px;"></td><td style="padding: 10px; border-right: 1px solid #dee2e6;"><input type="number" name="min_temps" value="${range.min}" step="0.1" style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px;"></td><td style="padding: 10px;"><input type="number" name="max_temps" value="${range.max}" step="0.1" style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px;"></td></tr>`;
                     }
                     
-                    // Send to API
-                    fetch('/api/sensors/tag', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        },
-                        body: JSON.stringify({
-                            channel: channel,
-                            label: label
-                        })
-                    })
-                    .then(response => response.json())
-                    .then(data => {
-                        if (data.success) {
-                            alert(data.message);
-                        } else {
-                            alert('Error: ' + data.error);
-                        }
-                    })
-                    .catch(error => {
-                        console.error('Error:', error);
-                        alert('Failed to save label');
-                    });
+                    tableHtml += '</tbody></table>';
+                    container.innerHTML = tableHtml;
+                })
+                .catch(error => {
+                    console.error('Failed to fetch sensor ranges:', error);
+                    // Fallback: create inputs without pre-filled ranges
+                    let tableHtml = '<table style="width: 100%; border-collapse: collapse; font-size: 13px;">';
+                    tableHtml += '<thead><tr style="background-color: #e9ecef; border-bottom: 2px solid #dee2e6;">';
+                    tableHtml += '<th style="padding: 10px; text-align: left; border-right: 1px solid #dee2e6;">Channel</th>';
+                    tableHtml += '<th style="padding: 10px; text-align: left; border-right: 1px solid #dee2e6;">Custom Label</th>';
+                    tableHtml += '<th style="padding: 10px; text-align: left; border-right: 1px solid #dee2e6;">Min (°C)</th>';
+                    tableHtml += '<th style="padding: 10px; text-align: left;">Max (°C)</th>';
+                    tableHtml += '</tr></thead><tbody>';
+                    
+                    // Generate exactly numThermocouples rows (all with defaults)
+                    for (let i = 0; i < numThermocouples; i++) {
+                        const ch = `Ch${i}`;
+                        tableHtml += `<tr style="border-bottom: 1px solid #dee2e6;"><td style="padding: 10px; border-right: 1px solid #dee2e6; font-weight: 600; background-color: #f8f9fa;">Ch${i}</td><td style="padding: 10px; border-right: 1px solid #dee2e6;"><input type="text" name="labels" placeholder="e.g., Oven_1" style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px;"></td><td style="padding: 10px; border-right: 1px solid #dee2e6;"><input type="number" name="min_temps" value="-50" step="0.1" style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px;"></td><td style="padding: 10px;"><input type="number" name="max_temps" value="100" step="0.1" style="width: 100%; padding: 6px; border: 1px solid #ddd; border-radius: 3px; font-size: 12px;"></td></tr>`;
+                    }
+                    
+                    tableHtml += '</tbody></table>';
+                    container.innerHTML = tableHtml;
                 });
-            });
+        }
+        
+        // UI-04 & UI-07: Initialize sensor configuration inputs on page load
+        document.addEventListener('DOMContentLoaded', function() {
+            // Initial population of sensor config table
+            regenerateSensorConfigTable();
             
-            // Update labels when thermocouple count changes
+            // FIX v2.7.1: Listen for thermocouple count changes and regenerate table
+            // Important: Use 'change' event and immediately regenerate (don't reload page)
             document.getElementById('num_thermocouples').addEventListener('change', function() {
-                location.reload();
+                regenerateSensorConfigTable();
             });
         });
     </script>
