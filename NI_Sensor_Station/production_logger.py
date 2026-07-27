@@ -48,7 +48,7 @@ class GlobalConfig:
     
     def __init__(self):
         self.lock = threading.RLock()
-        self.CONFIG_FILE = "config.json"
+        self.CONFIG_FILE = "config/config.json"
         self.restart_required = threading.Event()
         
         # config_hardware: Device and channel specifications
@@ -63,7 +63,7 @@ class GlobalConfig:
         self.config_logging = {
             "ENABLE_CSV_LOGGING": True,
             "ENABLE_GOOGLE_SHEETS": True,
-            "CSV_FOLDER": "./Data",  # NEW v2.5: Configurable output folder
+            "CSV_FOLDER": "data",  # NEW v2.5: Configurable output folder
             "CSV_FILENAME": "thermocouple_data.csv",  # NEW v2.5: Configurable filename
             "GOOGLE_SHEETS_LINK": "",  # NEW v2.5: User-provided Sheets link (optional)
             "TEST_SESSION_NAME": "",  # NEW v2.6: Name of test for config file generation
@@ -217,8 +217,8 @@ daq_control_state = DAQControlState()
 ALLOWED_USERS = global_config.security["ALLOWED_USERS"]
 
 # File paths (deprecated - will use dynamic paths from config)
-CSV_FILE = "thermocouple_data.csv"
-CREDENTIALS_FILE = "credentials.json"
+CSV_FILE = "data/thermocouple_data.csv"
+CREDENTIALS_FILE = "config/credentials.json"
 SESSION_SECRET_KEY = "production_logger_secret_key_2024"
 
 # TC Type mappings - will be initialized if nidaqmx is available
@@ -247,11 +247,14 @@ def _initialize_tc_type_map():
 # LOGGING SETUP
 # ============================================================================
 
+# Ensure logs directory exists
+os.makedirs("logs", exist_ok=True)
+
 logging.basicConfig(
     level=logging.INFO,
     format='%(asctime)s - %(levelname)s - %(message)s',
     handlers=[
-        logging.FileHandler('production_logger.log'),
+        logging.FileHandler('logs/production_logger.log'),
         logging.StreamHandler()
     ]
 )

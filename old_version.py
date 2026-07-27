@@ -23,17 +23,7 @@ from pathlib import Path
 from typing import List, Dict, Optional, Any
 from functools import wraps
 
-# Try to import nidaqmx, but allow module to still load if it fails
-# (for PyInstaller or environments without NI-DAQmx installed)
-try:
-    import nidaqmx
-    NIDAQMX_AVAILABLE = True
-except ImportError as e:
-    NIDAQMX_AVAILABLE = False
-    logger = logging.getLogger(__name__)
-    logger.warning(f"nidaqmx not available: {e}")
-    logger.warning("Hardware acquisition will be disabled. Dashboard will run in demo mode.")
-
+import nidaqmx
 import gspread
 from google.oauth2.service_account import Credentials
 from flask import Flask, render_template_string, request, jsonify, session, redirect, url_for, flash
@@ -141,7 +131,7 @@ class GlobalConfig:
     def update_config(self, section: str, updates: Dict[str, Any]):
         """Thread-safe configuration update."""
         with self.lock:
-            if section in ["config_hardware", "config_logging", "config_timing", "config_ui", "security"]:
+            if section in ["config_hardware", "config_logging", "config_timing", "security"]:
                 getattr(self, section).update(updates)
         
         self.save_to_disk()
@@ -153,7 +143,7 @@ class GlobalConfig:
     def get_config(self, section: str) -> Dict[str, Any]:
         """Thread-safe configuration read."""
         with self.lock:
-            if section in ["config_hardware", "config_logging", "config_timing", "config_ui", "security"]:
+            if section in ["config_hardware", "config_logging", "config_timing", "security"]:
                 return dict(getattr(self, section))
         return {}
     
@@ -163,7 +153,6 @@ class GlobalConfig:
             return {
                 "config_hardware": dict(self.config_hardware),
                 "config_logging": dict(self.config_logging),
-                "config_ui": dict(self.config_ui),
                 "config_timing": dict(self.config_timing),
                 "security": dict(self.security),
             }
@@ -221,27 +210,13 @@ CSV_FILE = "thermocouple_data.csv"
 CREDENTIALS_FILE = "credentials.json"
 SESSION_SECRET_KEY = "production_logger_secret_key_2024"
 
-# TC Type mappings - will be initialized if nidaqmx is available
-TC_TYPE_MAP = {}
-
-def _initialize_tc_type_map():
-    """Initialize TC_TYPE_MAP only if nidaqmx is available."""
-    global TC_TYPE_MAP
-    if NIDAQMX_AVAILABLE:
-        TC_TYPE_MAP = {
-            "K": nidaqmx.constants.ThermocoupleType.K,
-            "J": nidaqmx.constants.ThermocoupleType.J,
-            "T": nidaqmx.constants.ThermocoupleType.T,
-            "E": nidaqmx.constants.ThermocoupleType.E,
-        }
-    else:
-        # Demo mode - use string mappings
-        TC_TYPE_MAP = {
-            "K": "K",
-            "J": "J",
-            "T": "T",
-            "E": "E",
-        }
+# TC Type mappings
+TC_TYPE_MAP = {
+    "K": nidaqmx.constants.ThermocoupleType.K,
+    "J": nidaqmx.constants.ThermocoupleType.J,
+    "T": nidaqmx.constants.ThermocoupleType.T,
+    "E": nidaqmx.constants.ThermocoupleType.E,
+}
 
 # ============================================================================
 # LOGGING SETUP
@@ -416,12 +391,6 @@ class DAQEngine:
     
     def _open_nidaqmx_task(self):
         """Open and configure NI-DAQmx task."""
-        # Check if nidaqmx is available
-        if not NIDAQMX_AVAILABLE:
-            logger.error("Cannot open nidaqmx task: nidaqmx is not available (hardware not connected or PyInstaller limited mode)")
-            logger.warning("Running in demonstration mode without hardware acquisition")
-            return False
-        
         try:
             config_hardware = global_config.get_config("config_hardware")
             config_timing = global_config.get_config("config_timing")
@@ -473,14 +442,6 @@ class DAQEngine:
         and returned as a flat list [ch0, ch1, ch2, ...].
         """
         try:
-            # Check if task was successfully initialized
-            if self.task is None:
-                logger.error("❌ Hardware not available: nidaqmx task not initialized")
-                logger.warning("   Running in demonstration mode without hardware")
-                # Return demo data instead
-                num_channels = global_config.config_hardware["NUM_CHANNELS"]
-                return [20.0 + i*5 for i in range(num_channels)]  # Demo: 20, 25, 30°C
-            
             values = self.task.read()  # No number_of_samples_per_channel parameter!
             
             # Ensure values is always a list
@@ -2677,9 +2638,6 @@ SETTINGS_TEMPLATE = """
 
 def main():
     """Start Flask web server only. DAQ engine starts on-demand via /api/start (Version 2.5)."""
-    # Initialize TC type map based on nidaqmx availability
-    _initialize_tc_type_map()
-    
     logger.info("Starting Production Logger System v2.5 (Dashboard Command Center)")
     logger.info("DAQ engine will start on-demand when user clicks 'Start Logger'")
     

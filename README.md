@@ -1,118 +1,94 @@
 # NI-Sensor-data-logger-and-Interpretor
-This repository will be used to log data from sensors like Thermocouples, Accelerometers, Acoustic Pressure Sensors, Laser Sensors etc. After logging data there will be a Gemini base layer to analyze and interpret the data collected. 
+This repository is a professional-grade solution for logging data from sensors like Thermocouples, Accelerometers, Acoustic Pressure Sensors, and Laser Sensors. It features a robust Python-based DAQ engine integrated with a real-time Web Dashboard.
 
-# 🌡️ NI 9213 Thermocouple Logger & Web Dashboard
+# 🌡️ NI Thermocouple Logger & Web Dashboard (v2.7)
 
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-success)
+![Version](https://img.shields.io/badge/Version-2.7-orange)
 ![Python](https://img.shields.io/badge/Python-3.x-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
 
-A robust, "Self-Healing" data acquisition system for National Instruments (NI) hardware. This project logs thermocouple data from an **NI 9213** module to local CSV files and Google Sheets while hosting a live, secure Web Dashboard for remote monitoring.
+A "Self-Healing" data acquisition system for National Instruments (NI) hardware. Optimized for the **NI 9213** module, this system logs data to local CSVs and Google Sheets while providing a secure, interactive web interface.
+
+---
+
+## 🚀 NEW in Version 2.7: Standalone Distribution
+We now provide a **Standalone Station** for seamless deployment in labs without requiring manual environment management.
+
+### **📦 NI_Sensor_Station**
+The `NI_Sensor_Station` folder is a self-contained package designed for lab technicians:
+1.  **`SETUP_PREREQUISITES.bat`**: One-click setup. Creates a virtual environment and installs all dependencies.
+2.  **`START_SYSTEM.bat`**: One-click launcher. Activates the environment and starts the dashboard.
+3.  **Organized Storage**:
+    *   `config/`: Managed settings (`config.json`) and credentials.
+    *   `data/`: Automated CSV logging directory.
+    *   `logs/`: Application performance and error logs.
 
 ---
 
 ## ✨ Key Features
 
-* **Universal Logging:** Simultaneously logs to:
-    * 📂 **Local CSV:** With buffer protection against file locks (e.g., if open in Excel).
-    * ☁️ **Google Sheets:** Real-time cloud upload.
-    * 🌐 **Web Dashboard:** Live temperature view accessible via browser.
-* **Self-Healing Architecture:**
-    * **Auto-Reconnect:** Automatically attempts to restore Google Sheets connection if Wi-Fi drops.
-    * **Data Buffering:** Queues data in memory if the CSV file is locked, preventing data loss.
-* **Secure Access:** Email-based login system for the Web Dashboard.
-* **Configurable Speed:** Supports both **High Accuracy** (default) and **High Speed** modes.
+*   **v2.7 Precision:** Now supports **3-decimal precision** for high-accuracy industrial logging.
+*   **Dynamic UI:**
+    *   **Custom Sensor Tagging:** Name your channels (e.g., "Oven-1", "Ambient") directly from the UI.
+    *   **Dynamic Gauge Ranges:** Set custom Min/Max ranges for each gauge in the Settings panel.
+    *   **Real-time Trends:** Interactive Chart.js plots showing the last 100 samples.
+*   **Industrial Resilience:**
+    *   **CSV Buffer Protection:** Continues logging even if the CSV file is locked (e.g., open in Excel).
+    *   **Cloud Throttling:** Smart reconnection to Google Sheets to prevent network flooding during outages.
+*   **On-Demand DAQ:** Start and Stop data acquisition directly from the Web Dashboard.
 
 ---
 
 ## 🛠️ Hardware Requirements
 
-* **Chassis:** NI cDAQ-9174, cDAQ-9178, or similar USB/Ethernet chassis.
-* **Module:** [NI 9213](https://www.ni.com/en-us/support/model.ni-9213.html) (16-Channel Thermocouple Input).
-* **Sensors:** K-Type Thermocouples (configurable for J/T/E).
+*   **Chassis:** NI cDAQ-9174, cDAQ-9178, or similar.
+*   **Module:** [NI 9213](https://www.ni.com/en-us/support/model.ni-9213.html) (16-Channel Thermocouple Input).
+*   **Sensors:** Thermocouples (Types K, J, T, E supported).
 
 ---
 
-## ⚙️ Software Prerequisites
+## ⚙️ Installation & Usage
 
-1.  **Python 3.7+**
-2.  **NI-DAQmx Driver:** Download and install from [NI.com](https://www.ni.com/en-us/support/downloads/drivers/download.ni-daqmx.html).
-3.  **Google Cloud Project:** (Optional, for Sheets logging)
-    * Enable **Google Sheets API** and **Drive API**.
-    * Download service account keys as `credentials.json`
-  
-    
-**2. Create Virtual Environment**
-     # Windows
-python -m venv venv
-.\venv\Scripts\activate
+### **Option 1: Lab Technician (Standalone)**
+1.  Download the `NI_Sensor_Station` folder.
+2.  Run `SETUP_PREREQUISITES.bat` once.
+3.  Run `START_SYSTEM.bat` to launch the dashboard at `http://localhost:5000`.
 
-# Linux/Mac
-python3 -m venv venv
-source venv/bin/activate
+### **Option 2: Developer (Manual)**
+1.  Install [NI-DAQmx Drivers](https://www.ni.com/en-us/support/downloads/drivers/download.ni-daqmx.html).
+2.  Clone the repository:
+    ```bash
+    git clone https://github.com/Ajiket/NI-Sensor-data-logger-and-Interpretor.git
+    cd NI-Sensor-data-logger-and-Interpretor
+    ```
+3.  Install dependencies: `pip install nidaqmx flask gspread google-auth`
+4.  Run: `python production_logger.py`
 
-**3. Install Dependencies**
-
-pip install nidaqmx flask gspread
-
-4. Setup Google Credentials (Optional)
-
-Configuration
-
-Variable,Description,Default
-DEVICE_NAME,"The name of your module in NI MAX (e.g., cDAQ1Mod1)","""cDAQ1Mod1"""
-CHANNELS_STR,"Range of channels to scan (e.g., ai0:3)","""ai0:3"""
-ENABLE_CSV_LOGGING,Toggle local file saving,True
-ENABLE_GOOGLE_SHEETS,Toggle cloud uploading,True
-SAMPLING_INTERVAL,Seconds between data points,2.0
-ENABLE_HIGH_SPEED,Set True for fast scanning (<1s),False
-ALLOWED_USERS,List of emails allowed to login,['admin@...']
-
-▶️ **Usage**
-1. Start the System
-Run the main script:
-
-python production_logger.py
-
-**2.** Access the Dashboard**
-****Local PC: Open your browser to http://localhost:5000**
-
-**Remote Device: Open http://<HOST_PC_IP>:5000 (e.g., http://192.168.1.15:5000)**
-
-**3. Login**
-Use one of the email addresses defined in the ALLOWED_USERS list config.
-
-**📂 Project Structure
-📦 ni-thermocouple-logger
- ┣ 📜 production_logger.py   # Main application (DAQ + Web Server)
- ┣ 📜 credentials.json       # Google Cloud API Key (DO NOT COMMIT THIS)
- ┣ 📜 thermocouple_data.csv  # Generated log file
- ┗ 📜 README.md              # Project Documentation**
-
- 🔧 **Troubleshooting**
-Q: The script says "Device not found".
-
-Open NI MAX on your PC.
-
-Check the name under Devices and Interfaces.
-
-Update DEVICE_NAME in the script to match (e.g., Dev1 vs cDAQ1Mod1).
-
-Q: I see "Open" instead of temperature.
-
-The NI 9213 returns a high value (>2000°C) when a wire is broken or disconnected. Check your sensor wiring.
-
-Q: Can I open the CSV while logging?
-
-Yes. The system will detect the file lock, buffer the data in memory, and write it all at once when you close the file.
-
-📜 License
-This project is licensed under the MIT License - see the LICENSE file for details.
 ---
 
-## 🚀 Installation
+## 📂 Project Structure
+```text
+📦 NI-Sensor-data-logger-and-Interpretor
+ ┣ 📂 NI_Sensor_Station       # Standalone distribution package
+ ┃ ┣ 📂 config                # Settings and Credentials
+ ┃ ┣ 📂 data                  # Logged CSV files
+ ┃ ┣ 📂 logs                  # App logs
+ ┃ ┣ 📜 SETUP_PREREQUISITES.bat
+ ┃ ┗ 📜 START_SYSTEM.bat
+ ┣ 📂 Specs                   # Architectural & UX Specifications
+ ┣ 📜 production_logger.py    # Main Application Source
+ ┣ 📜 sync_session.bat        # Automated GitHub Sync Tool
+ ┗ 📜 README.md               # This documentation
+```
 
-### 1. Clone the Repository
-```bash
-git clone [https://github.com/your-username/ni-thermocouple-logger.git](https://github.com/your-username/ni-thermocouple-logger.git)
-cd ni-thermocouple-logger
+---
+
+## 🔧 Troubleshooting
+*   **"Device Not Found":** Ensure the `DEVICE_NAME` in Settings matches the name in **NI MAX** (e.g., `cDAQ1Mod1`).
+*   **"Open" Status:** The system detects open circuits (broken wires). Check your sensor connections.
+*   **Demo Mode:** If NI-DAQmx is not installed, the system will automatically run in Demo Mode for UI testing.
+
+---
+
+## 📜 License
+This project is licensed under the MIT License.
