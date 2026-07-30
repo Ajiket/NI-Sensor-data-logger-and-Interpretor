@@ -1,21 +1,28 @@
 {
     "config_hardware": {
         "DEVICE_NAME": "cDAQ1Mod1",
-        "CHANNELS_STR": "ai0:3",
-        "NUM_CHANNELS": 4,
+        "CHANNELS_STR": "ai0:0",
+        "NUM_CHANNELS": 1,
         "TC_TYPE": "K"
     },
     "config_logging": {
         "ENABLE_CSV_LOGGING": true,
         "ENABLE_GOOGLE_SHEETS": false,
         "CSV_FOLDER": "data",
-        "CSV_FILENAME": "thermocouple_data.csv",
-        "GOOGLE_SHEETS_LINK": "",
+        "CSV_FILENAME": "t1.csv",
+        "GOOGLE_SHEETS_LINK": "https://docs.google.com/spreadsheets/d/1k8kkMSdXwHpphdCyRpC3nfHoXQ5KlHgNYBJo-D61IZU/edit?gid=0#gid=0",
         "TEST_SESSION_NAME": "VERIFICATION_TEST"
     },
     "config_ui": {
-        "sensor_labels": {},
-        "sensor_ranges": {}
+        "sensor_labels": {
+            "Ch0": "TC1"
+        },
+        "sensor_ranges": {
+            "Ch0": {
+                "min": -50.0,
+                "max": 100.0
+            }
+        }
     },
     "config_timing": {
         "SAMPLING_INTERVAL": 2.0,
