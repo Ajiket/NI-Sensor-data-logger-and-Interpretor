@@ -1,118 +1,66 @@
-# NI-Sensor-data-logger-and-Interpretor
-This repository will be used to log data from sensors like Thermocouples, Accelerometers, Acoustic Pressure Sensors, Laser Sensors etc. After logging data there will be a Gemini base layer to analyze and interpret the data collected. 
-
 # 🌡️ NI 9213 Thermocouple Logger & Web Dashboard
 
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-success)
 ![Python](https://img.shields.io/badge/Python-3.x-blue)
-![License](https://img.shields.io/badge/License-MIT-green)
 
-A robust, "Self-Healing" data acquisition system for National Instruments (NI) hardware. This project logs thermocouple data from an **NI 9213** module to local CSV files and Google Sheets while hosting a live, secure Web Dashboard for remote monitoring.
+A robust, "Self-Healing" data acquisition system for National Instruments (NI) hardware. This project logs thermocouple data from an **NI 9213** module to local CSV files and Google Sheets while hosting a live, secure Web Dashboard for remote monitoring and system configuration.
 
 ---
 
 ## ✨ Key Features
 
-* **Universal Logging:** Simultaneously logs to:
-    * 📂 **Local CSV:** With buffer protection against file locks (e.g., if open in Excel).
-    * ☁️ **Google Sheets:** Real-time cloud upload.
-    * 🌐 **Web Dashboard:** Live temperature view accessible via browser.
-* **Self-Healing Architecture:**
-    * **Auto-Reconnect:** Automatically attempts to restore Google Sheets connection if Wi-Fi drops.
-    * **Data Buffering:** Queues data in memory if the CSV file is locked, preventing data loss.
-* **Secure Access:** Email-based login system for the Web Dashboard.
-* **Configurable Speed:** Supports both **High Accuracy** (default) and **High Speed** modes.
+* **Universal Logging:** Simultaneously logs to Local CSV and Google Sheets.
+* **Self-Healing Architecture:** Auto-reconnects to the cloud and buffers CSV data if the file is locked.
+* **Web Dashboard:** Live temperature gauges, real-time trend plots, and hardware status.
+* **Dynamic Configuration:** Configure channels, labels, ranges, and logging targets directly from the Web UI. No code changes required.
+* **Robust Hardware Detection:** Automatically formats and handles channels regardless of physical sequence (e.g., Slot 3: TC1, TC2, TC14, TC15).
 
 ---
 
-## 🛠️ Hardware Requirements
+## 🚀 How to Use (For Lab Technicians)
 
-* **Chassis:** NI cDAQ-9174, cDAQ-9178, or similar USB/Ethernet chassis.
-* **Module:** [NI 9213](https://www.ni.com/en-us/support/model.ni-9213.html) (16-Channel Thermocouple Input).
-* **Sensors:** K-Type Thermocouples (configurable for J/T/E).
+This folder contains a fully self-contained application.
+
+### First-Time Setup
+1. Double-click **`SETUP_PREREQUISITES.bat`**.
+2. Wait for it to create the Python virtual environment and install all dependencies automatically.
+
+### Running the System
+1. Double-click **`START_SYSTEM.bat`**.
+2. A terminal window will open, and the system will start.
+3. Open your web browser and go to: **`http://localhost:5000`**
+4. Log in (Default test emails: `admin@company.com` or `engineer@lab.com` with passwords `admin123` or `engineer123` respectively).
+5. Click **"Start Logger"** on the dashboard.
 
 ---
 
-## ⚙️ Software Prerequisites
+## ⚙️ Hardware Configuration
 
-1.  **Python 3.7+**
-2.  **NI-DAQmx Driver:** Download and install from [NI.com](https://www.ni.com/en-us/support/downloads/drivers/download.ni-daqmx.html).
-3.  **Google Cloud Project:** (Optional, for Sheets logging)
-    * Enable **Google Sheets API** and **Drive API**.
-    * Download service account keys as `credentials.json`
-  
-    
-**2. Create Virtual Environment**
-     # Windows
-python -m venv venv
-.\venv\Scripts\activate
+The system uses `config/config.json` for persistent settings. However, **you can change almost all settings directly from the Settings page in the Web Dashboard.**
 
-# Linux/Mac
-python3 -m venv venv
-source venv/bin/activate
+* **Chassis Setup:** If you need to change the physical module location, you can update the `config.json` file in the `config/` folder.
+* **Channels:** The system supports dynamic sequences like `ai1,ai2,ai14,ai15`.
 
-**3. Install Dependencies**
-
-pip install nidaqmx flask gspread
-
-4. Setup Google Credentials (Optional)
-
-Configuration
-
-Variable,Description,Default
-DEVICE_NAME,"The name of your module in NI MAX (e.g., cDAQ1Mod1)","""cDAQ1Mod1"""
-CHANNELS_STR,"Range of channels to scan (e.g., ai0:3)","""ai0:3"""
-ENABLE_CSV_LOGGING,Toggle local file saving,True
-ENABLE_GOOGLE_SHEETS,Toggle cloud uploading,True
-SAMPLING_INTERVAL,Seconds between data points,2.0
-ENABLE_HIGH_SPEED,Set True for fast scanning (<1s),False
-ALLOWED_USERS,List of emails allowed to login,['admin@...']
-
-▶️ **Usage**
-1. Start the System
-Run the main script:
-
-python production_logger.py
-
-**2.** Access the Dashboard**
-****Local PC: Open your browser to http://localhost:5000**
-
-**Remote Device: Open http://<HOST_PC_IP>:5000 (e.g., http://192.168.1.15:5000)**
-
-**3. Login**
-Use one of the email addresses defined in the ALLOWED_USERS list config.
-
-**📂 Project Structure
-📦 ni-thermocouple-logger
- ┣ 📜 production_logger.py   # Main application (DAQ + Web Server)
- ┣ 📜 credentials.json       # Google Cloud API Key (DO NOT COMMIT THIS)
- ┣ 📜 thermocouple_data.csv  # Generated log file
- ┗ 📜 README.md              # Project Documentation**
-
- 🔧 **Troubleshooting**
-Q: The script says "Device not found".
-
-Open NI MAX on your PC.
-
-Check the name under Devices and Interfaces.
-
-Update DEVICE_NAME in the script to match (e.g., Dev1 vs cDAQ1Mod1).
-
-Q: I see "Open" instead of temperature.
-
-The NI 9213 returns a high value (>2000°C) when a wire is broken or disconnected. Check your sensor wiring.
-
-Q: Can I open the CSV while logging?
-
-Yes. The system will detect the file lock, buffer the data in memory, and write it all at once when you close the file.
-
-📜 License
-This project is licensed under the MIT License - see the LICENSE file for details.
 ---
 
-## 🚀 Installation
+## 📂 Project Structure
 
-### 1. Clone the Repository
-```bash
-git clone [https://github.com/your-username/ni-thermocouple-logger.git](https://github.com/your-username/ni-thermocouple-logger.git)
-cd ni-thermocouple-logger
+📦 NI_Sensor_Station
+ ┣ 📂 config
+ ┃ ┗ 📜 config.json          # Persistent configuration state
+ ┣ 📂 src                    # Modular application code (core, daq, web)
+ ┣ 📂 logs                   # Application logs
+ ┣ 📜 app.py                 # Application entry point
+ ┣ 📜 START_SYSTEM.bat       # Launcher script
+ ┣ 📜 SETUP_PREREQUISITES.bat# Installation script
+ ┣ 📜 requirements.txt       # Dependencies
+ ┗ 📜 README.md              # This file
+
+---
+
+## 🔧 Troubleshooting
+
+* **Q: I see "Open" or "Error" instead of temperature.**
+  The NI 9213 returns an open-circuit warning if a wire is broken or disconnected. Check your physical sensor wiring on the module.
+* **Q: The dashboard won't load.**
+  Ensure `START_SYSTEM.bat` is running in the background and that no errors are printed in the terminal.

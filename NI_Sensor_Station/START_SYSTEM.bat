@@ -32,5 +32,5 @@ echo [2/2] Starting Production Logger...
 echo Dashboard will be available at http://localhost:5000
 echo.
 set NI_LOGGER_CONFIG=config/config.json
-python ../app.py
+python app.py
 pause

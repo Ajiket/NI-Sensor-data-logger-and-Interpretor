@@ -26,7 +26,11 @@ if %errorlevel% neq 0 (
 echo [2/3] Installing required libraries...
 call venv\Scripts\activate
 python -m pip install --upgrade pip
-pip install nidaqmx flask gspread google-auth
+if exist "requirements.txt" (
+    pip install -r requirements.txt
+) else (
+    pip install nidaqmx flask gspread google-auth
+)
 
 :: 4. Finalizing
 echo [3/3] Finalizing setup...
