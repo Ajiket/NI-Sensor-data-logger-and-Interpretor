@@ -1,5 +1,6 @@
 import logging
 import os
+import threading
 from src.core.config import GlobalConfig
 from src.core.shared_memory import SharedMemory
 from src.daq.engine import DAQControlState, DAQEngine
@@ -45,13 +46,26 @@ app = create_app(
 )
 
 def main():
-    """Start Flask web server. DAQ engine starts on-demand via UI."""
+    """Start Flask web server and auto-start the DAQ engine."""
     logger.info("Starting Modular Production Logger System")
-    logger.info("DAQ engine will start on-demand when user clicks 'Start Logger'")
+    
+    # Auto-start the DAQ engine on boot
+    try:
+        logger.info("Auto-starting DAQ Engine...")
+        with daq_control_state.lock:
+            daq_control_state.daq_engine = DAQEngine(shared_memory, global_config)
+            daq_control_state.daq_thread = threading.Thread(target=daq_control_state.daq_engine.run)
+            daq_control_state.daq_thread.start()
+            daq_control_state.running = True
+            from datetime import datetime
+            daq_control_state.start_time = datetime.now().isoformat()
+        logger.info("DAQ Engine auto-started successfully.")
+    except Exception as e:
+        logger.error(f"Failed to auto-start DAQ engine: {e}")
     
     try:
         logger.info("Starting Flask web server on http://127.0.0.1:5000")
-        app.run(host="127.0.0.1", port=5000, debug=False, threaded=True)
+        app.run(host="0.0.0.0", port=5000, debug=False, threaded=True)
     except KeyboardInterrupt:
         logger.info("Shutdown signal received")
     except Exception as e:
