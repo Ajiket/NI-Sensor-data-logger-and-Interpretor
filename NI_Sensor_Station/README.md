@@ -1,66 +1,78 @@
-# 🌡️ NI 9213 Thermocouple Logger & Web Dashboard
+# NI-Sensor-data-logger-and-Interpretor v2.8
+
+This repository is a professional-grade solution for logging data from sensors like Thermocouples, Accelerometers, Acoustic Pressure Sensors, and Laser Sensors. It features a robust Python-based backend, a real-time web dashboard, and an **AI-driven Inference Engine powered by Google Gemini**.
 
 ![Status](https://img.shields.io/badge/Status-Production%20Ready-success)
+![Version](https://img.shields.io/badge/Version-2.8-orange)
 ![Python](https://img.shields.io/badge/Python-3.x-blue)
 
-A robust, "Self-Healing" data acquisition system for National Instruments (NI) hardware. This project logs thermocouple data from an **NI 9213** module to local CSV files and Google Sheets while hosting a live, secure Web Dashboard for remote monitoring and system configuration.
+---
+
+## 🚀 NEW in Version 2.8: Gemini AI & Robust Deployment
+
+### **🧠 Gemini AI Layer**
+*   **Predictive Maintenance**: Gemini LLM analyzes trends to predict sensor failures or calibration drift.
+*   **Safety Inferences**: Built-in statistical detection for **Thermal Runaway** (rate of change > 2°C/s) and **Sensor Drift**.
+*   **Industrial Insights**: High-level AI interpretation of sensor data context.
+
+### **📦 NI_Sensor_Station (Standalone Distribution)**
+The `NI_Sensor_Station` folder is a self-contained package designed for lab technicians:
+1.  **`SETUP_PREREQUISITES.bat`**: One-click setup. Now uses robust path-independent installation.
+2.  **`START_SYSTEM.bat`**: One-click launcher with automatic hardware detection.
+3.  **Demo Mode Fallback**: Automatically activates if NI-DAQmx hardware or drivers are missing, allowing UI and logic testing on any machine.
 
 ---
 
 ## ✨ Key Features
 
-* **Universal Logging:** Simultaneously logs to Local CSV and Google Sheets.
-* **Self-Healing Architecture:** Auto-reconnects to the cloud and buffers CSV data if the file is locked.
-* **Web Dashboard:** Live temperature gauges, real-time trend plots, and hardware status.
-* **Dynamic Configuration:** Configure channels, labels, ranges, and logging targets directly from the Web UI. No code changes required.
-* **Robust Hardware Detection:** Automatically formats and handles channels regardless of physical sequence (e.g., Slot 3: TC1, TC2, TC14, TC15).
+*   **Modular Architecture:** Clean separation between Core, DAQ, and Web layers.
+*   **Real-Time Dashboard:** 
+    *   **Custom Sensor Tagging:** Name your channels (e.g., "Oven-1") from the UI.
+    *   **Dynamic Gauges:** Speedometer-style visualization with custom Min/Max ranges.
+    *   **Trend Charts:** Real-time Chart.js plots showing historical data.
+*   **Industrial Resilience:**
+    *   **CSV Buffer Protection:** Continues logging even if the CSV file is locked (e.g., open in Excel).
+    *   **Cloud Logging:** Secure, throttled streaming to Google Sheets.
 
 ---
 
-## 🚀 How to Use (For Lab Technicians)
+## 🛠️ Prerequisites & Hardware
 
-This folder contains a fully self-contained application.
+### **Software Requirements**
+1.  **Python 3.9+**
+2.  **NI-DAQmx Runtime:** (CRITICAL for hardware logging) [Download here](https://www.ni.com/en-in/support/downloads/drivers/download.ni-daqmx.html).
+3.  **Google Gemini API Key:** (Optional) Set as `GEMINI_API_KEY` in your environment for AI insights.
 
-### First-Time Setup
-1. Double-click **`SETUP_PREREQUISITES.bat`**.
-2. Wait for it to create the Python virtual environment and install all dependencies automatically.
-
-### Running the System
-1. Double-click **`START_SYSTEM.bat`**.
-2. A terminal window will open, and the system will start.
-3. Open your web browser and go to: **`http://localhost:5000`**
-4. Log in (Default test emails: `admin@company.com` or `engineer@lab.com` with passwords `admin123` or `engineer123` respectively).
-5. Click **"Start Logger"** on the dashboard.
+### **Hardware Requirements**
+*   **Chassis:** NI cDAQ-9174, cDAQ-9178, or similar.
+*   **Module:** [NI 9213](https://www.ni.com/en-us/support/model.ni-9213.html) (16-Channel Thermocouple Input).
+*   **Sensors:** Thermocouples (Types K, J, T, E supported).
 
 ---
 
-## ⚙️ Hardware Configuration
+## ⚙️ Installation & Usage
 
-The system uses `config/config.json` for persistent settings. However, **you can change almost all settings directly from the Settings page in the Web Dashboard.**
+### **Option 1: Lab Technician (Standalone Station)**
+1.  Download the `NI_Sensor_Station` folder.
+2.  Run `SETUP_PREREQUISITES.bat` once.
+3.  Run `START_SYSTEM.bat` to launch the dashboard at `http://localhost:5000`.
 
-* **Chassis Setup:** If you need to change the physical module location, you can update the `config.json` file in the `config/` folder.
-* **Channels:** The system supports dynamic sequences like `ai1,ai2,ai14,ai15`.
-
----
-
-## 📂 Project Structure
-
-📦 NI_Sensor_Station
- ┣ 📂 config
- ┃ ┗ 📜 config.json          # Persistent configuration state
- ┣ 📂 src                    # Modular application code (core, daq, web)
- ┣ 📂 logs                   # Application logs
- ┣ 📜 app.py                 # Application entry point
- ┣ 📜 START_SYSTEM.bat       # Launcher script
- ┣ 📜 SETUP_PREREQUISITES.bat# Installation script
- ┣ 📜 requirements.txt       # Dependencies
- ┗ 📜 README.md              # This file
+### **Option 2: Developer (Manual Setup)**
+1.  Ensure **NI-DAQmx Drivers** are installed.
+2.  Clone the repository and install dependencies:
+    ```bash
+    pip install -r requirements.txt
+    ```
+3.  Run: `python app.py`
 
 ---
 
 ## 🔧 Troubleshooting
+*   **"Device Not Found":** Ensure the `DEVICE_NAME` in Settings matches the name in **NI MAX** (e.g., `cDAQ1Mod3`).
+*   **"FileNotFoundError: Could not find module 'nicaiu'":** This means the **NI-DAQmx Driver** is missing. Download and install it from the link in the Prerequisites section.
+*   **AI Insights Missing:** Check that your `GEMINI_API_KEY` is correctly set and the machine has internet access.
 
-* **Q: I see "Open" or "Error" instead of temperature.**
-  The NI 9213 returns an open-circuit warning if a wire is broken or disconnected. Check your physical sensor wiring on the module.
-* **Q: The dashboard won't load.**
-  Ensure `START_SYSTEM.bat` is running in the background and that no errors are printed in the terminal.
+---
+
+## 📜 License
+This project is licensed under the MIT License.
