@@ -18,6 +18,8 @@ except ImportError:
 import gspread
 from google.oauth2.service_account import Credentials
 
+from src.core.inference_engine import InferenceEngine
+
 logger = logging.getLogger(__name__)
 
 class DAQControlState:
@@ -66,6 +68,7 @@ class DAQEngine:
         self.tc_type_map = {}
         self._initialize_tc_type_map()
         self._initialize_gspread()
+        self.inference_engine = InferenceEngine(global_config)
     
     def _initialize_tc_type_map(self):
         if NIDAQMX_AVAILABLE:
@@ -282,7 +285,12 @@ class DAQEngine:
 
     def run(self):
         self.running = True
-        self._open_nidaqmx_task()
+        try:
+            self._open_nidaqmx_task()
+        except Exception as e:
+            logger.error(f"Hardware initialization failed, falling back to simulated data: {e}")
+            self.task = None # Forces hardware read to return simulated data
+            
         try:
             while self.running:
                 loop_start = time.time()
@@ -291,6 +299,11 @@ class DAQEngine:
                 self._flush_csv_buffer()
                 self._upload_to_cloud()
                 self._update_shared_memory(processed)
+                
+                # Perform AI Inference
+                inferences = self.inference_engine.analyze(self.shared_mem)
+                self.shared_mem.update_inferences(inferences)
+                
                 time.sleep(max(0, self.global_config.config_timing["SAMPLING_INTERVAL"] - (time.time() - loop_start)))
         except Exception as e:
             logger.error(f"DAQ fatal error: {e}")

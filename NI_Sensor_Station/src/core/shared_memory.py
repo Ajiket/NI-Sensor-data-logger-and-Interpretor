@@ -14,6 +14,7 @@ class SharedMemory:
         self.connection_status = "Disconnected"
         self.last_cloud_sync = None
         self.error_log = []
+        self.inferences = [] # List of Dicts: {type, label, value, severity}
     
     def reinitialize_sensors(self, num_channels: int, tc_type: str = "K"):
         """Reinitialize sensor data for new channel count."""
@@ -22,7 +23,13 @@ class SharedMemory:
             self.sensor_labels = {f"Ch{i}": f"TC{i+1}" for i in range(num_channels)}
             self.sensor_type_map = {f"Ch{i}": tc_type for i in range(num_channels)}
             self.sensor_history = {f"Ch{i}": [] for i in range(num_channels)}
-    
+            self.inferences = []
+
+    def update_inferences(self, inferences: List[Dict[str, Any]]):
+        """Update inference list."""
+        with self.lock:
+            self.inferences = inferences
+
     def update_sensor_data(self, channel_idx: int, value: float, is_open: bool = False):
         """Update sensor data for a specific channel. Enforces 3 decimal places."""
         with self.lock:
@@ -61,6 +68,7 @@ class SharedMemory:
                 "buffer_warning": self.buffer_warning,
                 "last_cloud_sync": self.last_cloud_sync,
                 "avg_temperature": round(avg_temperature, 3) if avg_temperature else None,
+                "inferences": list(self.inferences)
             }
     
     def add_to_csv_buffer(self, row: Dict[str, Any]):

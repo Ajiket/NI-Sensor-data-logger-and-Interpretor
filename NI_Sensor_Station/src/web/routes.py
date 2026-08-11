@@ -57,6 +57,7 @@ def create_app(shared_memory, global_config, daq_control_state, daq_engine_class
             try:
                 num_tc = int(request.form.get("num_thermocouples"))
                 tc_type = request.form.get("tc_type")
+                channels_str = request.form.get("channels_str", f"ai0:{num_tc-1}")
                 sampling_freq = float(request.form.get("sampling_freq"))
                 enable_csv = "enable_csv" in request.form
                 enable_sheets = "enable_sheets" in request.form
@@ -70,8 +71,24 @@ def create_app(shared_memory, global_config, daq_control_state, daq_engine_class
                 min_temps = request.form.getlist("min_temps")
                 max_temps = request.form.getlist("max_temps")
                 
+                # Step 1: Stop DAQ if running
+                was_running = False
+                if daq_control_state.is_running():
+                    was_running = True
+                    with daq_control_state.lock:
+                        if daq_control_state.daq_engine:
+                            daq_control_state.daq_engine.stop()
+                        daq_control_state.running = False
+                        if daq_control_state.daq_thread:
+                            daq_control_state.daq_thread.join(timeout=3.0)
+                
+                # Step 2: Apply Settings
                 with global_config.lock:
-                    global_config.config_hardware.update({"NUM_CHANNELS": num_tc, "TC_TYPE": tc_type, "CHANNELS_STR": f"ai0:{num_tc-1}"})
+                    global_config.config_hardware.update({
+                        "NUM_CHANNELS": num_tc, 
+                        "TC_TYPE": tc_type, 
+                        "CHANNELS_STR": channels_str
+                    })
                     global_config.config_timing.update({"SAMPLING_INTERVAL": 1.0/sampling_freq})
                     global_config.config_logging.update({
                         "ENABLE_CSV_LOGGING": enable_csv,
@@ -96,6 +113,15 @@ def create_app(shared_memory, global_config, daq_control_state, daq_engine_class
                     temp_engine = daq_engine_class(shared_memory, global_config)
                     temp_engine.save_test_config_file(user=session["user"])
                 
+                # Step 3: Auto-restart DAQ if it was running
+                if was_running:
+                    with daq_control_state.lock:
+                        daq_control_state.daq_engine = daq_engine_class(shared_memory, global_config)
+                        daq_control_state.daq_thread = threading.Thread(target=daq_control_state.daq_engine.run)
+                        daq_control_state.daq_thread.start()
+                        daq_control_state.running = True
+                        daq_control_state.start_time = datetime.now().isoformat()
+                
                 flash("Settings Saved Successfully", "success")
                 return redirect(url_for("dashboard"))
             except Exception as e:
@@ -105,6 +131,7 @@ def create_app(shared_memory, global_config, daq_control_state, daq_engine_class
         config = global_config.get_all_config()
         return render_template("settings.html", 
                              user=session["user"],
+                             config_hardware=config["config_hardware"],
                              num_thermocouples=config["config_hardware"]["NUM_CHANNELS"],
                              tc_type=config["config_hardware"]["TC_TYPE"],
                              sampling_freq=1.0/config["config_timing"]["SAMPLING_INTERVAL"],

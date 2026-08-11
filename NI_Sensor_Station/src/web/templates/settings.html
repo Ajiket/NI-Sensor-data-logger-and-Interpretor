@@ -248,6 +248,12 @@
                 </div>
                 
                 <div class="form-group">
+                    <label for="channels_str">Hardware Channels (e.g., ai0:3 or ai1,ai2,ai14,ai15)</label>
+                    <input type="text" id="channels_str" name="channels_str" value="{{ config_hardware.CHANNELS_STR if config_hardware else 'ai0:3' }}" placeholder="ai0:3" required>
+                    <div class="help-text">Specify physical channels on the module. Supports ranges and comma-separated lists.</div>
+                </div>
+                
+                <div class="form-group">
                     <label for="tc_type">Thermocouple Type</label>
                     <select id="tc_type" name="tc_type" required>
                         <option value="K" {% if tc_type == 'K' %}selected{% endif %}>Type K</option>

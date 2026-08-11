@@ -1,8 +1,8 @@
 {
     "config_hardware": {
         "DEVICE_NAME": "cDAQ1Mod3",
-        "CHANNELS_STR": "ai0:3",
-        "NUM_CHANNELS": 4,
+        "CHANNELS_STR": "ai0:2",
+        "NUM_CHANNELS": 3,
         "TC_TYPE": "K"
     },
     "config_logging": {

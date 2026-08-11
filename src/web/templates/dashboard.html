@@ -355,22 +355,13 @@
                     </div>
                 </div>
                 <div class="inference-panel">
-                    <h3 style="margin-bottom: 15px; color: #2c3e50;">Inference Panel</h3>
-                    <div class="inference-item">
-                        <span class="inference-label">Average Temperature:</span>
-                        <span class="inference-value" id="avgTemp">--°C</span>
-                    </div>
-                    <div class="inference-item">
-                        <span class="inference-label">Current Time:</span>
-                        <span class="inference-value" id="currentTime" style="font-size: 14px;">--:--:--</span>
-                    </div>
-                    <div class="inference-item">
-                        <span class="inference-label">Cursor Value:</span>
-                        <span class="inference-value" id="cursorValue">Hover chart</span>
-                    </div>
-                    <div class="inference-item">
-                        <span class="inference-label">Trend Direction:</span>
-                        <span class="inference-value" id="trendDirection">--</span>
+                    <h3 style="margin-bottom: 15px; color: #2c3e50;">🧠 AI Insights & Inferences</h3>
+                    <div id="inferenceContainer">
+                        <!-- Dynamic inferences will be inserted here -->
+                        <div class="inference-item">
+                            <span class="inference-label">Status:</span>
+                            <span class="inference-value">Analyzing...</span>
+                        </div>
                     </div>
                 </div>
             </div>
@@ -445,7 +436,7 @@
             valueArc.setAttribute('stroke', arcColor);
             valueArc.setAttribute('stroke-width', '8');
             valueArc.setAttribute('fill', 'none');
-            gauge.appendChild(arcColor);
+            gauge.appendChild(valueArc);
             
             // Center circle
             const circle = document.createElementNS('http://www.w3.org/2000/svg', 'circle');
@@ -571,7 +562,6 @@
                     statusElem.className = 'sensor-status error';
                     drawGauge(gaugeContainer, null, label, range.min, range.max);
                 } else {
-                    // FIX: Ensure values are displayed with correct precision
                     const numericValue = parseFloat(value);
                     valueElem.textContent = isNaN(numericValue) ? value : numericValue.toFixed(3);
                     statusElem.textContent = 'OK';
@@ -593,11 +583,6 @@
             if (data.timestamp) {
                 const dt = new Date(data.timestamp);
                 document.getElementById('timestamp').textContent = dt.toLocaleTimeString();
-                document.getElementById('currentTime').textContent = dt.toLocaleTimeString();
-            }
-            
-            if (data.avg_temperature !== null && data.avg_temperature !== undefined) {
-                document.getElementById('avgTemp').textContent = data.avg_temperature.toFixed(2) + '°C';
             }
             
             const bufferWarning = document.getElementById('bufferWarning');
@@ -606,6 +591,50 @@
             } else {
                 bufferWarning.style.display = 'none';
             }
+
+            // Update Inferences
+            updateInferencesUI(data);
+        }
+
+        function updateInferencesUI(data) {
+            const container = document.getElementById('inferenceContainer');
+            if (!container) return;
+
+            const inferences = data.inferences || [];
+            
+            // Add basic stats if not present in inferences
+            const displayInferences = [...inferences];
+            if (data.avg_temperature !== null) {
+                displayInferences.unshift({
+                    type: 'stats',
+                    label: 'Average Temp',
+                    value: data.avg_temperature.toFixed(2) + '°C',
+                    severity: 'info'
+                });
+            }
+
+            if (displayInferences.length === 0) {
+                container.innerHTML = `
+                    <div class="inference-item">
+                        <span class="inference-label">Status:</span>
+                        <span class="inference-value">Awaiting data...</span>
+                    </div>`;
+                return;
+            }
+
+            container.innerHTML = displayInferences.map(inf => {
+                let color = '#2c3e50';
+                if (inf.severity === 'critical') color = '#e74c3c';
+                if (inf.severity === 'warning') color = '#f39c12';
+                if (inf.severity === 'info') color = '#3498db';
+
+                return `
+                    <div class="inference-item">
+                        <span class="inference-label">${inf.label}:</span>
+                        <span class="inference-value" style="color: ${color}">${inf.value}</span>
+                    </div>
+                `;
+            }).join('');
         }
         
         function updateTrendPlot() {
@@ -675,35 +704,6 @@
                     }
                 }
             });
-            
-            calculateTrendDirection();
-        }
-        
-        function calculateTrendDirection() {
-            let allValues = [];
-            for (let i = 0; i < SENSOR_CHANNELS; i++) {
-                const trendData = trendDataCache[`Ch${i}`] || [];
-                allValues = allValues.concat(trendData.map(d => d.value));
-            }
-            
-            if (allValues.length > 5) {
-                const recent = allValues.slice(-5);
-                const older = allValues.slice(-10, -5);
-                const recentAvg = recent.reduce((a, b) => a + b, 0) / recent.length;
-                const olderAvg = older.reduce((a, b) => a + b, 0) / older.length;
-                
-                const directionElem = document.getElementById('trendDirection');
-                if (recentAvg > olderAvg) {
-                    directionElem.textContent = '📈 Increasing';
-                    directionElem.style.color = '#e74c3c';
-                } else if (recentAvg < olderAvg) {
-                    directionElem.textContent = '📉 Decreasing';
-                    directionElem.style.color = '#3498db';
-                } else {
-                    directionElem.textContent = '➡️ Stable';
-                    directionElem.style.color = '#27ae60';
-                }
-            }
         }
         
         async function updateDaqStatus() {
